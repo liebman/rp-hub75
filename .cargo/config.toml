@@ -1,0 +1,25 @@
+# Cargo configuration for the RP2350 (Pimoroni Interstate 75 W).
+#
+# The RP2350 has two Cortex-M33 cores, so the default target is the hard-float
+# Arm target. A RISC-V (Hazard3) build is possible with
+#   cargo build --target riscv32imac-unknown-none-elf
+# which needs -Trp235x_riscv.x instead of -Tlink.x, see the rp-hal examples.
+
+[build]
+target = "thumbv8m.main-none-eabihf"
+
+[target.thumbv8m.main-none-eabihf]
+rustflags = [
+    # --nmagic turns off page alignment of sections (saves flash)
+    "-C", "link-arg=--nmagic",
+    # link.x comes from cortex-m-rt, which pulls in our memory.x
+    "-C", "link-arg=-Tlink.x",
+    "-C", "target-cpu=cortex-m33",
+]
+# picotool flashes over the USB-C bootloader, so no debug probe is needed:
+# hold BOOT, tap RESET, then `cargo run-arm --example hello_usb`
+runner = "picotool load -u -v -x -t elf"
+
+[alias]
+build-arm = "build --release"
+run-arm = "run --release"

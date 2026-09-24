@@ -1,0 +1,44 @@
+[package]
+authors = ["liebman <liebman@zod.com>"]
+categories = ["embedded", "hardware-support", "no-std"]
+description = "A HUB75 LED matrix driver for RP2350 (Pimoroni Interstate 75 W)"
+edition = "2024"
+keywords = ["hub75", "rp2350", "led-matrix", "embedded", "driver"]
+license = "MIT OR Apache-2.0"
+name = "rp-hub75"
+rust-version = "1.85"
+version = "0.1.0"
+
+[lib]
+name = "rp_hub75"
+
+[dependencies]
+embedded-graphics = "0.8.2"
+# `interstate75` reorders the plain bitplane words so bit n is pin n for the
+# whole HUB75 bus (GP0-13), which is what lets one `out pins, 14` put a word
+# straight on the pins. See `src/programs.rs`.
+hub75-framebuffer = { version = "0.12.0", features = ["interstate75"] }
+pio = "0.3"
+rp235x-hal = { version = "0.4.0", features = [
+    "binary-info",
+    "critical-section-impl",
+    "rt",
+] }
+
+[dev-dependencies]
+cortex-m = "0.7"
+embedded-hal = "1.0"
+panic-halt = "0.2.0"
+usb-device = "0.3.2"
+usbd-serial = "0.2.2"
+
+[profile.dev]
+debug = true
+opt-level = "s"
+
+[profile.release]
+debug = true
+opt-level = "s"
+
+[patch.crates-io]
+hub75-framebuffer = { path = "../hub75-framebuffer" }
