@@ -13,6 +13,13 @@ version = "0.1.0"
 name = "rp_hub75"
 
 [features]
+# The examples' panel clock: 10 MHz with this off, 20 MHz with it, as the
+# esp-hub75 examples do. The driver takes whatever rate it is given and rounds
+# the divider up, so 20 MHz here means "as close to 20 MHz as a divider allows
+# without exceeding it" — 18.75 MHz on the examples' 150 MHz system clock, which
+# is the configuration every rate in NOTES.md was measured at.
+20mhz = []
+
 # Forward the panel's output-enable polarity to `hub75-framebuffer`, rather
 # than defining a second switch that can disagree with it. The OE pin is
 # driven straight out of the framebuffer's words, so the crate's words and the

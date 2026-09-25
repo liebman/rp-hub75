@@ -2,8 +2,15 @@
 //!
 //! The same display as `../esp-hub75/examples/gradient`: three horizontal colour
 //! ramps across the top of the panel — red, then green, then blue, one step per
-//! column — and three status lines below them showing the refresh rate, how long
-//! the last frame took to draw, and a counter that ticks ten times a second.
+//! column — and four status lines below them showing the refresh rate, how long
+//! the last frame took to draw, the driver's interrupts per second, and a counter
+//! that ticks ten times a second.
+//!
+//! The interrupt rate is measured rather than derived from `refresh_hz() *
+//! runs_per_refresh()`, because the point of that line is to check the product: it
+//! should read `runs_per_refresh()` times the refresh rate, and if the DMA's ring
+//! ever stops applying the rate jumps to the unaligned run count — 32 per refresh
+//! instead of 10 — which is visible here rather than only over the USB telemetry.
 //!
 //! Labels are left-justified and values right-justified, as two pieces of text on
 //! one line, rather than esp's single padded string. That is not a style choice:
@@ -18,6 +25,9 @@
 //! ```
 #![no_std]
 #![no_main]
+
+use core::sync::atomic::AtomicU32;
+use core::sync::atomic::Ordering;
 
 use embedded_graphics::Drawable;
 use embedded_graphics::geometry::Point;
@@ -43,9 +53,14 @@ use rp_hub75::Hub75Config;
 use rp_hub75::Hub75Pins;
 use rp_hub75::{BIT_DEPTH, PANEL_HEIGHT, PANEL_WIDTH, ROW_PAIRS, XTAL_FREQ_HZ};
 
+/// Interrupts the panel's DMA line has raised: one per run of the framebuffer's
+/// BCM sequence (see `telemetry`, which counts the same thing for its report).
+static IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
+
 /// The interrupt that walks the framebuffer's BCM sequence (see `ghost`).
 #[unsafe(no_mangle)]
 extern "C" fn DMA_IRQ_1() {
+    IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
     rp_hub75::on_dma_irq();
 }
 
@@ -71,7 +86,7 @@ struct Aligned(Fb);
 /// on a 4096-byte boundary of its own.
 ///
 /// Checked rather than assumed: the failure would be a quiet one, the panel still
-/// working, just with four times the interrupts.
+/// working, just for 32 runs a refresh instead of 10.
 const _: () = assert!(core::mem::align_of::<static_cell::StaticCell<Aligned>>() == 4096);
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
@@ -91,8 +106,13 @@ macro_rules! mk_static {
 /// Rows each colour band covers: the panel divided into eight, of which the three
 /// colours take the first three — the esp demo's layout.
 const BAND_ROWS: i32 = PANEL_HEIGHT as i32 / 8;
-/// Baseline of each status line, at the esp demo's offsets (seven pixels apart:
-/// a 5×7 font and a gap).
+/// Baseline of each status line, at the esp demo's offsets: seven pixels apart,
+/// which is the whole height of a `FONT_5X7` glyph at its own spacing.
+///
+/// `FONT_5X7` measures 5×7 with its baseline five rows down, so a line at `y`
+/// covers rows `y - 5` to `y + 1`. Four of them are rows 37 to 63, with the rest
+/// of the panel's lower half left free.
+const LINE0: i32 = PANEL_HEIGHT as i32 - 1 - 21;
 const LINE1: i32 = PANEL_HEIGHT as i32 - 1 - 14;
 const LINE2: i32 = PANEL_HEIGHT as i32 - 1 - 7;
 const LINE3: i32 = PANEL_HEIGHT as i32 - 1;
@@ -102,9 +122,21 @@ const LINE3: i32 = PANEL_HEIGHT as i32 - 1;
 const STEP: u8 = (256 / PANEL_WIDTH) as u8;
 /// A counter tick every this many milliseconds.
 const COUNTER_MS: u64 = 100;
+/// The interrupt rate is averaged over this many microseconds, as in the one
+/// second between `telemetry`'s reports.
+const RATE_US: u64 = 1_000_000;
 /// The counter's range, as in the esp demo: five digits, which beside its label
 /// still fits inside the panel's 64 pixels.
 const COUNTER_MAX: u32 = 99_999;
+
+/// The panel clock, as in the esp-hub75 examples: 10 MHz by default, 20 MHz with
+/// the `20mhz` feature.
+///
+/// The driver rounds the divider up, so what the panel runs at is this or the next
+/// slower divider's clock — `Refresh:` on the display is the truth, not this
+/// number.
+const PANEL_CLOCK: Rate<u32, 1, 1> =
+    Rate::<u32, 1, 1>::MHz(if cfg!(feature = "20mhz") { 20 } else { 10 });
 
 #[hal::entry]
 fn main() -> ! {
@@ -161,8 +193,7 @@ fn main() -> ! {
             pins.gpio13,
         ),
         clocks.system_clock.freq(),
-        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1)
-            .with_panel_clock(Rate::<u32, 1, 1>::MHz(10)),
+        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock(PANEL_CLOCK),
         fb0,
     )
     .expect("failed to start the panel");
@@ -172,14 +203,17 @@ fn main() -> ! {
     let mut render_ms = 0u32;
     let mut counter = 0u32;
     let mut counter_start = timer.get_counter().ticks();
+    let mut irq_hz = 0u32;
+    let mut irq_prev = 0u32;
+    let mut rate_start = counter_start;
 
     loop {
         let render_start = timer.get_counter().ticks();
 
-        draw(fb, hub75.refresh_hz(), render_ms, counter);
+        draw(fb, hub75.refresh_hz(), render_ms, irq_hz, counter);
 
         // How long that took. The number on screen is therefore the previous
-        // frame's, which at ~145 Hz is indistinguishable.
+        // frame's, which at panel refresh rates is indistinguishable.
         render_ms = ((timer.get_counter().ticks() - render_start) / 1_000) as u32;
 
         match hub75.swap(fb) {
@@ -187,9 +221,10 @@ fn main() -> ! {
             Err((_error, returned)) => fb = returned,
         }
 
-        // Ten ticks a second, as in the esp demo (whose counter runs to five
-        // digits; three is what fits here).
         let now = timer.get_counter().ticks();
+
+        // Ten ticks a second, as in the esp demo — whose counter runs to five
+        // digits, which is also what fits beside the label here.
         if now - counter_start >= COUNTER_MS * 1_000 {
             counter_start = now;
             counter = if counter >= COUNTER_MAX {
@@ -198,11 +233,24 @@ fn main() -> ! {
                 counter + 1
             };
         }
+
+        // Interrupts a second. Divided by the time that actually passed rather
+        // than the window asked for: this can only be checked once the swap above
+        // has returned, a frame late, which would otherwise read a little low.
+        // `wrapping_sub` because the count itself is a monotone `u32`.
+        if now - rate_start >= RATE_US {
+            let count = IRQ_COUNT.load(Ordering::Relaxed);
+            let delta = count.wrapping_sub(irq_prev);
+            let elapsed = now - rate_start;
+            irq_prev = count;
+            rate_start = now;
+            irq_hz = (u64::from(delta) * 1_000_000 / elapsed) as u32;
+        }
     }
 }
 
 /// The display: three colour ramps and the status block.
-fn draw(fb: &mut Fb, refresh_hz: u32, render_ms: u32, counter: u32) {
+fn draw(fb: &mut Fb, refresh_hz: u32, render_ms: u32, irq_hz: u32, counter: u32) {
     fb.erase();
 
     // Red, green and blue ramps. `x * STEP` walks an 8-bit channel, which at this
@@ -241,10 +289,11 @@ fn draw(fb: &mut Fb, refresh_hz: u32, render_ms: u32, counter: u32) {
         "Render:",
         decimal(&mut value, render_ms, b"ms"),
     );
+    line(fb, style, LINE1, "IRQ/s:", decimal(&mut value, irq_hz, b""));
     line(
         fb,
         style,
-        LINE1,
+        LINE0,
         "Simple:",
         decimal(&mut value, counter, b""),
     );

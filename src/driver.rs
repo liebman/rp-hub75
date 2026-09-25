@@ -118,6 +118,21 @@ const RING_SIZE_MASK: u32 = 0x0f << 8;
 /// PIO cycles one word costs. The panel clock is therefore the word rate.
 const CYCLES_PER_WORD: u32 = crate::programs::CYCLES_PER_WORD;
 
+/// The PIO divider for a requested panel clock, rounded **up**.
+///
+/// Rounding up rather than truncating matters because a panel's clock rating is a
+/// ceiling: the divider has to hold the word clock at or below the clock that was
+/// asked for, and truncating overshoots it — 20 MHz from a 150 MHz system clock
+/// would divide by 3 rather than 4 and run the panel at 25 MHz. Integer dividers
+/// are what the PIO is given here, so a request no divider hits exactly is met
+/// with the next slower clock; [`Hub75::panel_clock`] reports what was achieved.
+fn divider_for(system_clock_hz: u32, panel_clock_hz: u32) -> u32 {
+    // Saturating and at least one, so a degenerate request reaches the caller's
+    // assertion as a number rather than as a division by zero.
+    let word_clock_hz = panel_clock_hz.saturating_mul(CYCLES_PER_WORD).max(1);
+    system_clock_hz.div_ceil(word_clock_hz)
+}
+
 /// Pins a [`Hub75Pins`] holds: the fourteen of the HUB75 bus.
 pub const PIN_COUNT: usize = pins::WORD_PINS as usize;
 
@@ -166,6 +181,11 @@ impl Hub75Config {
     }
 
     /// Sets the panel shift clock. See [`Hub75Config::new`].
+    ///
+    /// The clock is a ceiling. The PIO divider is an integer and is rounded up, so
+    /// a request no divider hits exactly runs the panel at the next slower clock
+    /// rather than faster than the panel is rated for;
+    /// [`Hub75::panel_clock`] reports what was achieved.
     #[must_use]
     pub const fn with_panel_clock(mut self, panel_clock: Rate<u32, 1, 1>) -> Self {
         self.panel_clock = panel_clock;
@@ -611,13 +631,13 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
         };
 
         // A word every `CYCLES_PER_WORD` PIO cycles, so the divider is the ratio
-        // between the system clock and that many times the panel clock.
-        let word_clock = config.panel_clock.to_Hz() * CYCLES_PER_WORD;
-        let divider = system_clock.to_Hz() / word_clock;
+        // between the system clock and that many times the panel clock, rounded up
+        // so the panel never runs faster than the clock it was given.
+        let divider = divider_for(system_clock.to_Hz(), config.panel_clock.to_Hz());
         assert!(
             divider >= 1 && divider <= u16::MAX as u32,
             "the panel clock is not representable: divider {divider} is outside \
-             the PIO's 16-bit range (system clock {} Hz, panel clock {} Hz)",
+             the PIO's 1..=65535 range (system clock {} Hz, panel clock {} Hz)",
             system_clock.to_Hz(),
             config.panel_clock.to_Hz()
         );
@@ -925,5 +945,54 @@ impl<FB: 'static> Hub75Swap<FB> {
             }
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CYCLES_PER_WORD;
+    use super::divider_for;
+
+    /// The divider is a ceiling, not a rounding of the request to nearest.
+    ///
+    /// This is the examples' board: a 150 MHz system clock, against the panel
+    /// clocks the `20mhz` feature chooses between. Truncating rather than rounding
+    /// up would divide by 3 for the 20 MHz request and put the panel at 25 MHz.
+    #[test]
+    fn divider_rounds_up() {
+        assert_eq!(divider_for(150_000_000, 10_000_000), 8);
+        assert_eq!(divider_for(150_000_000, 20_000_000), 4);
+        assert_ne!(divider_for(150_000_000, 20_000_000), 3);
+        // A divider that hits exactly is kept: /4 is 37.5 MHz a word, 18.75 MHz a
+        // panel clock.
+        assert_eq!(divider_for(150_000_000, 18_750_000), 4);
+        assert_eq!(divider_for(100_000_000, 25_000_000), 2);
+        // From a slower system clock the same request needs a smaller divider.
+        assert_eq!(divider_for(48_000_000, 10_000_000), 3);
+    }
+
+    /// Whatever the request, the panel ends up at that clock or slower.
+    #[test]
+    fn achieved_clock_never_exceeds_the_request() {
+        const SYSTEM_CLOCK: u32 = 150_000_000;
+        for request in [
+            1_000_000, 9_375_000, 10_000_000, 18_750_000, 20_000_000, 37_500_000, 75_000_000,
+        ] {
+            let divider = divider_for(SYSTEM_CLOCK, request);
+            let achieved = SYSTEM_CLOCK / divider / CYCLES_PER_WORD;
+            assert!(
+                achieved <= request,
+                "asked for {request} Hz, the panel would run at {achieved} Hz"
+            );
+        }
+    }
+
+    /// A request no divider can serve is reported by the caller's assertion rather
+    /// than as a panic here.
+    #[test]
+    fn degenerate_requests_are_numbers() {
+        assert!(divider_for(150_000_000, 0) > u16::MAX as u32);
+        assert!(divider_for(150_000_000, u32::MAX) <= u16::MAX as u32);
+        assert_eq!(divider_for(150_000_000, u32::MAX), 1);
     }
 }

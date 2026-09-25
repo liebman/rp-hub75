@@ -83,7 +83,7 @@ struct Aligned(Fb);
 /// on a 4096-byte boundary of its own.
 ///
 /// Checked rather than assumed: the failure would be a quiet one, the panel still
-/// working, just with four times the interrupts.
+/// working, just for 32 runs a refresh instead of 10.
 const _: () = assert!(core::mem::align_of::<static_cell::StaticCell<Aligned>>() == 4096);
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
@@ -122,6 +122,15 @@ fn sweep_row(step: u32) -> u32 {
         0
     }
 }
+
+/// The panel clock, as in the esp-hub75 examples: 10 MHz by default, 20 MHz with
+/// the `20mhz` feature.
+///
+/// The driver rounds the divider up, so what the panel runs at is this or the next
+/// slower divider's clock — `Refresh:` on the display is the truth, not this
+/// number.
+const PANEL_CLOCK: Rate<u32, 1, 1> =
+    Rate::<u32, 1, 1>::MHz(if cfg!(feature = "20mhz") { 20 } else { 10 });
 
 #[hal::entry]
 fn main() -> ! {
@@ -180,8 +189,7 @@ fn main() -> ! {
         clocks.system_clock.freq(),
         // The panel clock is the one knob that trades timing margin for refresh
         // rate: if a phase shows horizontal bleed, halve this and look again.
-        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1)
-            .with_panel_clock(Rate::<u32, 1, 1>::kHz(18_750)),
+        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock(PANEL_CLOCK),
         fb0,
     )
     .expect("failed to start the panel");

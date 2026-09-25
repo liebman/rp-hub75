@@ -40,20 +40,23 @@ loop {
   plane-major, 1024 row-major for this panel). A blocked interrupt pauses the
   picture; it cannot corrupt it. `Hub75::runs_per_refresh()` reports the cost of
   whichever layout you chose.
-* Six planes at an 18.75 MHz panel clock is 63 panel scans a refresh — 6.9 ms,
-  ≈143 Hz. (Eight planes flickers at this clock; see `BIT_DEPTH`.)
+* Six planes is 63 panel scans a refresh, so the frame is the panel clock over
+  129 024 words: 13.8 ms (≈72 Hz) at the examples' default 10 MHz, and 6.9 ms
+  (≈145 Hz) with the `20mhz` feature, which the divider rounds to 18.75 MHz.
+  (Eight planes flickers at this clock; see `BIT_DEPTH`.)
 
 ## Cargo features
 
 | feature | effect |
 |---|---|
+| `20mhz` | the examples' panel clock: 10 MHz without it, 20 MHz with it, as the esp-hub75 examples do. The divider is an integer rounded *up*, so 20 MHz here lands on 18.75 MHz — the clock every rate in [`NOTES.md`](NOTES.md) was measured at |
 | `invert-oe` | forwards to `hub75-framebuffer/invert-oe` for a panel whose output enable is active-high. The crate's words are the only place that polarity lives, so there is one switch. |
 
 ## Examples
 
 | example | what |
 |---|---|
-| `gradient` | the display from `esp-hub75`'s gradient demo: three colour ramps (red, green, blue, one light level per column) and a status block whose labels are left-justified while the values are right-justified — refresh rate, render time, and a counter ticking ten times a second, which is also the heartbeat |
+| `gradient` | the display from `esp-hub75`'s gradient demo: three colour ramps (red, green, blue, one light level per column) and a status block whose labels are left-justified while the values are right-justified — refresh rate, render time, the interrupt rate, and a counter ticking ten times a second, which is also the heartbeat. The interrupt rate is the panel's own check on the engine: measured, not derived, so it should read `runs_per_refresh()` × the refresh rate — and a lost DMA ring would show as 32 runs a refresh instead of 10 |
 | `telemetry` | the same engine and panel pattern, with `wait_for_done().await` and fps/interrupt/swap counters over USB CDC (the digit on the panel is the loop’s frame count) |
 | `ghost` | a ghosting / bleed probe: four phases — a blinking dot, a raster, a diagonal and a sweeping bar — that make row bleed (adjacent, and across the frame boundary) and column bleed visible, and name their direction |
 
