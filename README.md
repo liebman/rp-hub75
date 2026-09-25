@@ -53,8 +53,9 @@ loop {
 
 | example | what |
 |---|---|
-| `gradient` | the handler, double buffering and a tear-free swap; a static linear ramp (equal light per column) with a red marker sweeping across it (a marker that stops means a swap hung) |
+| `gradient` | the display from `esp-hub75`'s gradient demo: three colour ramps (red, green, blue, one light level per column) and a status block whose labels are left-justified while the values are right-justified — refresh rate, render time, and a counter ticking ten times a second, which is also the heartbeat |
 | `telemetry` | the same engine and panel pattern, with `wait_for_done().await` and fps/interrupt/swap counters over USB CDC (the digit on the panel is the loop’s frame count) |
+| `ghost` | a ghosting / bleed probe: four phases — a blinking dot, a raster, a diagonal and a sweeping bar — that make row bleed (adjacent, and across the frame boundary) and column bleed visible, and name their direction |
 
 The two earlier engines (M3's raw single-channel stream and M4a's six-channel ring)
 lived in examples too; those are gone from the tree — what they taught is in

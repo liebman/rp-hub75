@@ -78,8 +78,29 @@ type UsbBus = hal::usb::UsbBus;
 #[repr(align(4096))]
 struct Aligned(Fb);
 
-static mut FB0: Aligned = Aligned(Fb::new());
-static mut FB1: Aligned = Aligned(Fb::new());
+/// The DMA ring repeats a segment only while the framebuffer's *address* stays
+/// aligned, so the cell has to keep the wrapper's alignment: it does, because
+/// alignment is the maximum over a struct's fields and `static_cell`'s
+/// `AtomicBool` cannot lower 4096 — which in turn puts the framebuffer behind it
+/// on a 4096-byte boundary of its own.
+///
+/// Checked rather than assumed: the failure would be a quiet one, the panel still
+/// working, just with four times the interrupts.
+const _: () = assert!(core::mem::align_of::<static_cell::StaticCell<Aligned>>() == 4096);
+
+/// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
+///
+/// `StaticCell` guarantees the value is taken at most once, so the two
+/// framebuffers cannot be confused for one another, and it hands out a `'static`
+/// reference without `unsafe`.
+macro_rules! mk_static {
+    ($t:ty,$val:expr) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit().write($val);
+        x
+    }};
+}
 
 /// Interrupts the panel's control channel has raised.
 static IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -204,10 +225,12 @@ fn main() -> ! {
     );
     let dma = pac.DMA.split(&mut pac.RESETS);
 
-    // SAFETY: each static is taken exactly once. One of the two buffers is the
-    // panel's at any moment and the other is this loop's; they alternate.
-    let fb0: &'static mut Fb = unsafe { &mut (*core::ptr::addr_of_mut!(FB0)).0 };
-    let fb1: &'static mut Fb = unsafe { &mut (*core::ptr::addr_of_mut!(FB1)).0 };
+    // One framebuffer is the panel's at any moment and the other is this loop's;
+    // a swap exchanges them.
+    let aligned0 = mk_static!(Aligned, Aligned(Fb::new()));
+    let aligned1 = mk_static!(Aligned, Aligned(Fb::new()));
+    let fb0: &'static mut Fb = &mut aligned0.0;
+    let fb1: &'static mut Fb = &mut aligned1.0;
 
     let hub75 = Hub75::new(
         pac.PIO0,

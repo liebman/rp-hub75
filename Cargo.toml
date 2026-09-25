@@ -20,6 +20,28 @@ name = "rp_hub75"
 # `rp235x-hal`'s `critical-section-impl` means `critical_section` is real.
 invert-oe = ["hub75-framebuffer/invert-oe"]
 
+skip-black-pixels = ["hub75-framebuffer/skip-black-pixels"]
+tail-closes-latch = ["hub75-framebuffer/tail-closes-latch"]
+lead-blank-1 = ["hub75-framebuffer/lead-blank-1"]
+lead-blank-2 = ["hub75-framebuffer/lead-blank-2"]
+lead-blank-4 = ["hub75-framebuffer/lead-blank-4"]
+lead-blank-8 = ["hub75-framebuffer/lead-blank-8"]
+lead-blank-16 = ["hub75-framebuffer/lead-blank-16"]
+lead-blank-32 = ["hub75-framebuffer/lead-blank-32"]
+trail-blank-1 = ["hub75-framebuffer/trail-blank-1"]
+trail-blank-2 = ["hub75-framebuffer/trail-blank-2"]
+trail-blank-4 = ["hub75-framebuffer/trail-blank-4"]
+trail-blank-8 = ["hub75-framebuffer/trail-blank-8"]
+trail-blank-16 = ["hub75-framebuffer/trail-blank-16"]
+trail-blank-32 = ["hub75-framebuffer/trail-blank-32"]
+
+inter-row-blank-4 = ["hub75-framebuffer/inter-row-blank-4"]
+inter-row-blank-8 = ["hub75-framebuffer/inter-row-blank-8"]
+inter-row-blank-16 = ["hub75-framebuffer/inter-row-blank-16"]
+inter-row-blank-32 = ["hub75-framebuffer/inter-row-blank-32"]
+
+reverse-row-order = ["hub75-framebuffer/reverse-row-order"]
+
 [dependencies]
 # The driver's swap state is shared with the DMA interrupt, so it lives in a
 # `critical_section::Mutex`. The implementation comes from `rp235x-hal`.
@@ -40,6 +62,9 @@ rp235x-hal = { version = "0.4.0", features = [
 cortex-m = "0.7"
 embedded-hal = "1.0"
 panic-halt = "0.2.0"
+# The examples reach their framebuffers through `StaticCell` (see `mk_static!`),
+# so a swap can hand a `'static mut` framebuffer back and forth without `unsafe`.
+static_cell = "2.1"
 usb-device = "0.3.2"
 usbd-serial = "0.2.2"
 
