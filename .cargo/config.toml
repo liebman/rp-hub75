@@ -17,7 +17,7 @@ rustflags = [
     "-C", "target-cpu=cortex-m33",
 ]
 # picotool flashes over the USB-C bootloader, so no debug probe is needed:
-# hold BOOT, tap RESET, then `cargo run-arm --example hello_usb`
+# hold BOOT, tap RESET, then `cargo run-arm --example gradient`
 runner = "picotool load -u -v -x -t elf"
 
 [alias]

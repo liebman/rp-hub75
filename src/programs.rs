@@ -109,6 +109,17 @@ use pio::{Program, RP2040_MAX_PROGRAM_SIZE};
 /// also the transfer size the DMA moves. The top two bits are spare.
 pub const BITS_PER_WORD: u32 = 16;
 
+/// Bit of a framebuffer word that drives [`pins::STB`], the row latch.
+pub const LATCH_BIT: u16 = 1 << pins::STB;
+
+/// Bit of a framebuffer word that drives [`pins::OE`].
+///
+/// The pin is active low, so this bit *set* means the outputs are off — which is
+/// what `hub75-framebuffer` uses as its blanking level by default. See
+/// [`crate::table::BLANK_WORD`] for the one place the driver depends on that
+/// convention.
+pub const OE_BIT: u16 = 1 << pins::OE;
+
 /// `pull_threshold` for the stream program: the fourteen bits of the word that
 /// one `out pins, 14` shifts out. See the module docs — this is what keeps one
 /// FIFO word per column, and why it is not `BITS_PER_WORD`.
@@ -842,6 +853,11 @@ mod tests {
     ///
     /// The duty cycle is the 1/32 scan limit less the one word each row pair
     /// needs blanked for its latch and address change: 63 of a slot's 64 words.
+    /// The emulator models the default OE polarity (bit 13 high = blanked). With
+    /// the crate's `invert-oe` feature the *words* flip that level, and the model
+    /// would have to flip with it — the driver only needs the crate and the blank
+    /// plane to agree, which is what `table`'s own tests check.
+    #[cfg(not(feature = "invert-oe"))]
     #[test]
     fn the_panel_shows_the_diagonal_where_the_framebuffer_put_it() {
         let fb = m2b_diagonal();
@@ -918,6 +934,8 @@ mod tests {
     /// blue at x = 0, 1, 2) puts its dots at x = 1, 2, 3, the strobe wants to be
     /// a word later, which `hub75-framebuffer`'s `tail-closes-latch` feature (or
     /// a latch on its own state machine) gives it.
+    /// See the note on the diagonal test: this models the default OE polarity.
+    #[cfg(not(feature = "invert-oe"))]
     #[test]
     fn a_strobe_that_latches_on_its_rising_edge_shifts_every_row() {
         let fb = m2b_diagonal();

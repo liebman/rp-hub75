@@ -17,6 +17,25 @@
 //! | clock / strobe / output-enable | GP11 / GP12 / GP13 |
 //! | buttons, status LED, Qw/ST | GP14, GP15, GP22 / GP18 / GP20 + GP21 |
 //!
+//! # Using it
+//!
+//! Two framebuffers, one driver, and a swap per frame:
+//!
+//! ```text
+//! let hub75 = Hub75::new(pio, ch_ctrl, ch_data, &mut resets, pins, sys_clock,
+//!                        Hub75Config::new(), fb0)?;
+//! let mut fb = fb1;                       // fb0 is on the panel now
+//! loop {
+//!     draw(fb);
+//!     fb = hub75.swap(fb)?.wait();        // the other buffer comes back
+//! }
+//! ```
+//!
+//! `swap` arms the switch and hands the outgoing buffer back once nothing is
+//! reading it, so the buffer being drawn and the buffer on screen are never the
+//! same one. With a wake interrupt configured, `wait_for_done().await` parks the
+//! caller instead of spinning — [`driver`] has the whole picture.
+//!
 //! # How the panel is driven
 //!
 //! The words in a `hub75-framebuffer` bitplane framebuffer *are* the pin levels
@@ -29,27 +48,36 @@
 //! touches the panel while the refresh runs. See [`programs`] for the program,
 //! the pin layout and the one invariant it rests on.
 //!
-//! One DMA channel feeds that FIFO, DREQ-paced so the machine never runs dry,
-//! reading half-words from the framebuffer and looping for ever. With a
-//! single-plane framebuffer the whole refresh is one contiguous segment, and on
-//! RP2350 a channel whose transfer count is in `TRIGGER_SELF` mode and which
-//! chains to itself repeats that segment without a single interrupt — but only
-//! together with a read-ring the size of the segment, because a self-trigger
-//! reloads the transfer *count* and not the *read address*. So a static image
-//! costs no CPU at all, and the BCM scan patterns of a multi-plane framebuffer
-//! need one DMA restart per segment (each segment is a different repetition
-//! count, so no single ring covers it).
+//! Feeding that FIFO is [`driver`]'s **one** DMA channel, re-armed by its
+//! completion interrupt: each run streams one segment of the framebuffer's own
+//! BCM sequence — `len` bytes, `reps` times — and [`engine`] is the cursor that
+//! walks it. Where the layout allows it (a power of two, aligned to it, checked
+//! per run) the DMA's ring repeats a segment in hardware instead.
 //!
-//! Status: M3. That one machine and one channel stream a single-plane
-//! framebuffer; multi-plane BCM (`BIT_DEPTH`), double buffering and the segment
-//! walker are next.
+//! The sequence *is* the frame: brightness lives in the framebuffer's memory
+//! layout rather than in a register, so a plane-major, row-major, threshold or
+//! remapped framebuffer all drive the same code and the layout only changes the
+//! cost, which [`Hub75::runs_per_refresh`] reports. Six planes at an 18.75 MHz
+//! panel clock is 63 panel scans a refresh — 6.9 ms, ≈143 Hz — for 32 runs
+//! plane-major, or 1024 row-major before the ring paths are counted.
 //!
-//! See `NOTES.md` for the hardware bring-up results this is based on.
+//! See `NOTES.md` for the measurements and the register facts this rests on,
+//! and `plan.md` for what is done and what is next.
 
 #![no_std]
 
+pub mod color;
+pub mod driver;
+pub mod engine;
 pub mod pins;
 pub mod programs;
+
+pub use driver::Hub75;
+pub use driver::Hub75Config;
+pub use driver::Hub75Error;
+pub use driver::Hub75Pins;
+pub use driver::Hub75Swap;
+pub use driver::on_dma_irq;
 
 /// Framebuffer implementations shared with `esp-hub75`.
 ///
@@ -76,24 +104,26 @@ pub const ROW_PAIRS: usize = PANEL_HEIGHT / 2;
 
 /// BCM bit depth, i.e. the number of bit-planes the driver runs.
 ///
-/// The reference implementation for this board (Pimoroni's HUB75 driver) runs
-/// **10-bit gamma-corrected BCM**, but that is out of reach with
-/// `hub75-framebuffer` as it stands:
+/// **Six**, not eight, and the ceiling is not the reason: flicker is.
 ///
-/// * every bitplane framebuffer asserts `PLANES` is `1..=8`
-///   (`bitplane/{plain,latched}/{row,frame}.rs`),
-/// * the non-bitplane (full-frame-copy) family has the same ceiling: `plain.rs`
-///   asserts `BITS <= 8`, where each bit is a whole copy of the frame in RAM,
-/// * `BCM_SEQUENCE_CAPACITY` is 10, documented as "8 bit-planes plus an
-///   inter-row gap plus an end-of-row trailer", and row-major framebuffers need
-///   `PLANES + gap + tail` slots, so 10 planes would not even fit,
-/// * the framebuffer's colour type is 8 bits per channel, so extra planes would
-///   not add range on their own.
+/// `hub75-framebuffer` can drive eight planes, and this driver did — but eight
+/// planes is `2^0 + … + 2^7 = 255` panel scans per frame, and the MSB plane alone
+/// is 128 of them. At the ~19-25 MHz panel clock these examples run at, that is a
+/// 21 ms frame (~48 Hz), and this panel visibly flickers: the eye integrates a
+/// 1/32-scan image over the whole frame, so the frame rate is what it feels.
+/// Six planes is `2^0 + … + 2^5 = 63` scans — a 6.9 ms frame (~145 Hz at
+/// 18.75 MHz) — and still 64 levels per channel, which with the gamma correction
+/// on the drawing side is plenty.
 ///
-/// So 8 planes is what we can drive today. Going further means extending
-/// `hub75-framebuffer` itself (raise the assert, grow the capacity to
-/// `PLANES + gap + tail`, and widen the pixel type to actually buy precision).
-/// Until then, gamma-correct the colours you draw instead of reaching for extra
-/// planes — that recovers most of the low-end fidelity the reference driver gets
-/// from its 10-bit gamma table.
-pub const BIT_DEPTH: u8 = 8;
+/// A tenth plane, or a flicker-free eight, needs the reference driver's other
+/// trick: it runs **10-bit gamma-corrected BCM** and modulates the *output
+/// enable* pulse width within each scan instead of repeating scans, so brightness
+/// costs no extra frame time. That is a different scheme from the BCM sequence
+/// `hub75-framebuffer` describes, and out of scope here.
+///
+/// The crate's own ceiling is worth knowing too: every bitplane framebuffer
+/// asserts `PLANES` is `1..=8`, the non-bitplane (full-frame-copy) family asserts
+/// `BITS <= 8`, and `BCM_SEQUENCE_CAPACITY` is 10 (documented as "8 bit-planes plus
+/// an inter-row gap plus an end-of-row trailer"). Going past eight planes means
+/// extending `hub75-framebuffer` itself.
+pub const BIT_DEPTH: u8 = 6;
