@@ -53,8 +53,8 @@ loop {
 
 | example | what |
 |---|---|
-| `gradient` | the handler, double buffering and a tear-free swap; a moving gamma ramp with a marker that stops if a swap hangs |
-| `telemetry` | the same engine with `wait_for_done().await` and fps/interrupt/swap counters over USB CDC |
+| `gradient` | the handler, double buffering and a tear-free swap; a static linear ramp (equal light per column) with a red marker sweeping across it (a marker that stops means a swap hung) |
+| `telemetry` | the same engine and panel pattern, with `wait_for_done().await` and fps/interrupt/swap counters over USB CDC (the digit on the panel is the loop’s frame count) |
 
 The two earlier engines (M3's raw single-channel stream and M4a's six-channel ring)
 lived in examples too; those are gone from the tree — what they taught is in

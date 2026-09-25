@@ -342,8 +342,11 @@ impl Engine {
     /// Programs the current segment and starts it.
     fn program(&mut self) {
         let offset = self.offsets[self.cursor.index()];
-        let run = self.cursor.run(&self.plan, offset as u32);
         let address = self.base.wrapping_add(offset as u32);
+        // The ring decision is made against the address the hardware will read,
+        // not the offset: a ring wraps the power-of-two boundary containing an
+        // address, and a framebuffer base is not necessarily aligned.
+        let run = self.cursor.run(&self.plan, address);
         let ring_size = if run.ring_bytes == 0 {
             0
         } else {
@@ -363,6 +366,28 @@ impl Engine {
             self.trans_count_trig.write_volatile(run.words);
         }
         self.ringed = run.ring_bytes != 0;
+    }
+
+    /// Runs one refresh will really cost, with the ring paths counted.
+    ///
+    /// A copy of the cursor walks the plan once against the addresses the
+    /// hardware will see, so this is the number of interrupts a refresh takes —
+    /// not the un-ringed upper bound. For a frame-major buffer whose base is not
+    /// aligned to its segments' lengths, the two are the same; align the
+    /// framebuffer and the last, most-repeated segments collapse into single
+    /// runs.
+    fn runs(&self) -> u32 {
+        let mut cursor = Cursor::new();
+        let mut runs = 0;
+        loop {
+            let offset = self.offsets[cursor.index()];
+            let address = self.base.wrapping_add(offset as u32);
+            let run = cursor.run(&self.plan, address);
+            runs += 1;
+            if cursor.advance(&self.plan, run.ring_bytes != 0) == Step::FrameBoundary {
+                return runs;
+            }
+        }
     }
 }
 
@@ -691,7 +716,6 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
             frame_words <= MAX_TRANSFER_WORDS,
             "a refresh of {frame_words} words does not fit a transfer count"
         );
-        let runs = plan.runs_per_refresh() as u32;
         assert!(
             shortest_run_bytes::<FB>() >= WORD_BYTES,
             "the framebuffer has a zero-length segment, which would stall the engine"
@@ -711,7 +735,7 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
             )
         };
 
-        critical_section::with(|cs| {
+        let runs = critical_section::with(|cs| {
             let mut engine = ENGINE.borrow_ref_mut(cs);
             let engine = &mut *engine;
             engine.plan = plan;
@@ -727,6 +751,8 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
             for index in 0..plan.count() {
                 engine.offsets[index] = fb.bcm_segment_ptr(index) as u32 as i32 - base as i32;
             }
+            // The real cost of this layout, ring paths included.
+            engine.runs()
         });
         SWAP_DONE.store(false, Ordering::Release);
 
@@ -766,12 +792,13 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
         self.panel_clock.to_Hz() / self.frame_words
     }
 
-    /// Runs the interrupt must service per refresh.
+    /// Runs the interrupt services per refresh — the honest cost of the layout.
     ///
-    /// The honest cost of the framebuffer's layout: 32 for a six-plane
-    /// plane-major frame, `32 × NROWS` for a row-major one, before any segment
-    /// the DMA's ring can repeat on its own. Multiply by [`refresh_hz`] for the
-    /// interrupt rate.
+    /// Counted through the engine's own cursor, so segments the DMA's ring can
+    /// repeat on its own are already folded in: 32 for a six-plane plane-major
+    /// frame on an unaligned buffer, 10 when the buffer is aligned to its
+    /// segments, `NROWS` times as many for row-major. Multiply by
+    /// [`refresh_hz`] for the interrupt rate.
     ///
     /// [`refresh_hz`]: Self::refresh_hz
     pub fn runs_per_refresh(&self) -> u32 {

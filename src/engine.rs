@@ -114,18 +114,21 @@ impl Plan {
             .sum()
     }
 
-    /// The DMA recipe for one run of segment `index`.
+    /// The DMA recipe for one run of segment `index`, read from `address`.
     ///
-    /// `offset` is the segment's byte offset from the framebuffer base.
-    pub fn run(&self, index: usize, offset: u32) -> Run {
+    /// `address` is the **absolute** address the hardware will read, not an
+    /// offset from the framebuffer base. A ring wraps the `1 << RING_SIZE`
+    /// boundary *containing a given address*, so the alignment that decides
+    /// whether a ring is usable is the address's own.
+    pub fn run(&self, index: usize, address: u32) -> Run {
         let entry = self.entry(index);
         let words = (entry.len / WORD_BYTES) as u32;
         // A ring is only worth asking for when the hardware would otherwise have
         // to be re-armed for every repetition, and only usable when the region
-        // is a power of two *and* the pointer is aligned to it — checked here,
+        // is a power of two *and* the address is aligned to it — checked here,
         // per run, against what the layout actually produced.
         if entry.reps > 1 {
-            let ring = ring_bytes(entry.len, offset);
+            let ring = ring_bytes(entry.len, address);
             let repeated = words.saturating_mul(entry.reps as u32);
             if ring != 0 && repeated <= MAX_TRANSFER_WORDS {
                 return Run {
@@ -150,16 +153,23 @@ pub fn shortest_run_bytes<FB: FrameBuffer>() -> usize {
         .unwrap_or(0)
 }
 
-/// The ring size the DMA may use to repeat a `len`-byte segment at `offset`, or
-/// `0` for none.
+/// The ring size the DMA may use to repeat a `len`-byte segment read from
+/// `address`, or `0` for none.
 ///
-/// A ring wraps a region that is a power of two **and** the pointer has to be
-/// aligned to it, because the wrap works by masking address bits. Both are
-/// tested against the layout the crate actually produced; nothing is assumed
-/// about planes, rows or strides. When it applies, `reps` costs no interrupts at
-/// all; when it does not, the engine re-arms per repetition.
-pub fn ring_bytes(len: usize, offset: u32) -> u32 {
-    if len > 1 && len.is_power_of_two() && len <= 32768 && offset % len as u32 == 0 {
+/// A ring wraps a region that is a power of two **and** the address has to be
+/// aligned to it, because the wrap works by masking address bits. `address` must
+/// therefore be the address the hardware sees: aligning an *offset* is not the
+/// same thing, since a framebuffer base is not necessarily aligned itself.
+///
+/// Both conditions are tested against the layout the crate actually produced;
+/// nothing is assumed about planes, rows or strides. When a ring applies, `reps`
+/// costs no interrupts at all. When it does not — the common case for a frame
+/// whose segments are suffixes of unequal, mostly non-power-of-two length — the
+/// engine re-arms once per repetition. Aligning the framebuffer (a
+/// `#[repr(align(N))]` wrapper) is what turns the last, most-repeated segments
+/// of such a frame into single runs.
+pub fn ring_bytes(len: usize, address: u32) -> u32 {
+    if len > 1 && len.is_power_of_two() && len <= 32768 && address % len as u32 == 0 {
         len as u32
     } else {
         0
@@ -209,9 +219,9 @@ impl Cursor {
         self.index
     }
 
-    /// The run for the current segment.
-    pub fn run(&self, plan: &Plan, offset: u32) -> Run {
-        plan.run(self.index, offset)
+    /// The run for the current segment, read from `address`.
+    pub fn run(&self, plan: &Plan, address: u32) -> Run {
+        plan.run(self.index, address)
     }
 
     /// Advances after one run of the current segment has completed.
@@ -388,13 +398,15 @@ mod tests {
         fn check<FB: FrameBuffer>(fb: &FB) {
             let plan = Plan::of::<FB>();
             let (offsets, _) = offsets(fb);
+            let base = fb as *const FB as u32;
             let mut cursor = Cursor::new();
             let mut runs = 0usize;
             let mut bytes = 0usize;
             let mut boundaries = 0usize;
             let limit = plan.count() * (plan.runs_per_refresh() + 1) + 1;
             loop {
-                let run = cursor.run(&plan, offsets[cursor.index()] as u32);
+                let address = base.wrapping_add(offsets[cursor.index()] as u32);
+                let run = cursor.run(&plan, address);
                 assert!(run.words > 0, "a zero-length run would stall the engine");
                 assert!(run.words <= MAX_TRANSFER_WORDS, "run does not fit");
                 runs += 1;
@@ -459,18 +471,39 @@ mod tests {
         assert_eq!(cursor.advance(&plan, true), Step::Advance);
     }
 
-    /// A ring is a promise about the address: power of two, and aligned to it.
+    /// A ring is a promise about the *address*: power of two, and aligned to it.
     /// Everything else falls back to one run per repetition.
     #[test]
-    fn the_ring_is_only_offered_when_the_layout_allows_it() {
+    fn the_ring_is_only_offered_when_the_address_allows_it() {
         // The row-major case: a 128-byte plane row at a 128-byte boundary.
-        assert_eq!(ring_bytes(128, 0), 128);
-        assert_eq!(ring_bytes(128, 4096), 128);
+        assert_eq!(ring_bytes(128, 0x2000_0000), 128);
+        assert_eq!(ring_bytes(128, 0x2000_1000), 128);
         // Misaligned, not a power of two, empty, or wider than a ring can wrap.
-        assert_eq!(ring_bytes(128, 64), 0);
-        assert_eq!(ring_bytes(384, 0), 0);
-        assert_eq!(ring_bytes(0, 0), 0);
-        assert_eq!(ring_bytes(65536, 0), 0);
+        assert_eq!(ring_bytes(128, 0x2000_0040), 0);
+        assert_eq!(ring_bytes(384, 0x2000_0000), 0);
+        assert_eq!(ring_bytes(0, 0x2000_0000), 0);
+        assert_eq!(ring_bytes(65536, 0x2000_0000), 0);
+    }
+
+    /// The bug the first hardware run of `telemetry` exposed: an *offset* that
+    /// is aligned says nothing about the *address*, because a framebuffer base
+    /// is aligned to its own type, not to the segment. Testing the offset let
+    /// the DMA wrap a region that started before the segment, and the MSB
+    /// plane's passes read a shifted window.
+    #[test]
+    fn an_aligned_offset_is_not_an_aligned_address() {
+        // Frame-major: the last two segments have power-of-two lengths at
+        // 8192- and 4096-byte offsets — the offsets are aligned...
+        assert_eq!(16384 % 8192, 0);
+        assert_eq!(20480 % 4096, 0);
+        // ...and on an unaligned framebuffer neither address is, so no ring.
+        let base = 0x2000_0004u32;
+        assert_eq!(ring_bytes(8192, base + 16384), 0);
+        assert_eq!(ring_bytes(4096, base + 20480), 0);
+        // Align the framebuffer and the same segments ring in one run each.
+        let aligned = 0x2000_0000u32;
+        assert_eq!(ring_bytes(8192, aligned + 16384), 8192);
+        assert_eq!(ring_bytes(4096, aligned + 20480), 4096);
     }
 
     /// A ringed run covers every repetition in one go; a segment with a single
@@ -494,12 +527,16 @@ mod tests {
         );
 
         // The same segment one byte out of alignment: sixteen separate runs.
-        let misaligned = aligned.run(0, 2);
+        let misaligned = aligned.run(0, 0x2000_0002);
         assert_eq!(misaligned.ring_bytes, 0);
         assert_eq!(misaligned.words, (4096 / WORD_BYTES) as u32);
 
         let single = Plan::new(&[BcmLenReps { len: 4096, reps: 1 }], 1);
-        assert_eq!(single.run(0, 0).ring_bytes, 0, "a ring would save nothing");
+        assert_eq!(
+            single.run(0, 0x2000_0000).ring_bytes,
+            0,
+            "a ring would save nothing"
+        );
     }
 
     /// The interrupt has to re-arm before the PIO starves. Print the numbers for

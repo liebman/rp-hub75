@@ -12,6 +12,12 @@
 //!   writes are bounded and drop lines rather than block the loop — telemetry
 //!   must never be able to stop the panel.
 //!
+//! The panel shows the same static *linear* ramp as `gradient` — equal light per
+//! column, no gamma, so a wrong BCM weight kinks the line — with the loop’s frame
+//! count on top. The bench therefore needs no host at all to spot a stall: the
+//! digit ticks continuously (frames modulo ten, about fifteen times a second
+//! here), and if it ever stops, the loop has.
+//!
 //! ```text
 //! # board in BOOTSEL mode:
 //! cargo run-arm --example telemetry
@@ -62,8 +68,18 @@ const PLANES: usize = BIT_DEPTH as usize;
 type Fb = DmaFrameBuffer<NROWS, WORDS_PER_ROW, PLANES>;
 type UsbBus = hal::usb::UsbBus;
 
-static mut FB0: Fb = Fb::new();
-static mut FB1: Fb = Fb::new();
+/// A framebuffer aligned so the DMA's ring can repeat its segments.
+///
+/// A ring wraps the power-of-two boundary *containing an address*, so an aligned
+/// framebuffer is what lets `reps` be repeated in hardware: with it, this frame's
+/// 32 runs per refresh become 10 (planes 4 and 5, the 8- and 16-rep segments,
+/// collapse into one run each). Unaligned works exactly the same, just for more
+/// interrupts — `Hub75::runs_per_refresh()` reports whichever is true.
+#[repr(align(4096))]
+struct Aligned(Fb);
+
+static mut FB0: Aligned = Aligned(Fb::new());
+static mut FB1: Aligned = Aligned(Fb::new());
 
 /// Interrupts the panel's control channel has raised.
 static IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -190,8 +206,8 @@ fn main() -> ! {
 
     // SAFETY: each static is taken exactly once. One of the two buffers is the
     // panel's at any moment and the other is this loop's; they alternate.
-    let fb0: &'static mut Fb = unsafe { &mut *core::ptr::addr_of_mut!(FB0) };
-    let fb1: &'static mut Fb = unsafe { &mut *core::ptr::addr_of_mut!(FB1) };
+    let fb0: &'static mut Fb = unsafe { &mut (*core::ptr::addr_of_mut!(FB0)).0 };
+    let fb1: &'static mut Fb = unsafe { &mut (*core::ptr::addr_of_mut!(FB1)).0 };
 
     let hub75 = Hub75::new(
         pac.PIO0,
@@ -227,15 +243,15 @@ fn main() -> ! {
     let mut swaps: u32 = 0;
 
     let mut fb = fb1;
-    let mut phase = 0u32;
     loop {
         usb_dev.poll(&mut [&mut serial]);
         let now = timer.get_counter().ticks();
 
         // Draw, then hand the buffer over and park until the swap is applied.
-        draw(fb, phase, frames);
+        // The digit on the panel is this counter, so watching it tick is watching
+        // the loop (and therefore the swaps) run.
+        draw(fb, frames);
         frames += 1;
-        phase = phase.wrapping_add(1);
 
         match hub75.swap(fb) {
             Ok(mut swap) => {
@@ -291,9 +307,10 @@ impl fmt::Display for Banner<'_> {
         write!(
             f,
             "\r\npanel {}x{}, {} planes, {} Hz refresh, divider /{}\r\n\
-             {} runs per refresh (one interrupt each), from the framebuffer's\r\n\
-             own BCM sequence; a swap is armed every frame\r\n\
-             t(s)  frame   irqs    swap_waited\r\n",
+             {} runs per refresh — one interrupt each, with the DMA's ring\r\n\
+             repeats already folded in — walked from the framebuffer's own BCM\r\n\
+             sequence; a swap is armed every frame\r\n\
+             report  frame   irqs    swap_waited\r\n",
             PANEL_WIDTH,
             PANEL_HEIGHT,
             BIT_DEPTH,
@@ -305,16 +322,26 @@ impl fmt::Display for Banner<'_> {
 }
 
 /// One frame of the animation: a sweeping bar, with the frame digit on top.
-fn draw(fb: &mut Fb, phase: u32, frames: u32) {
+/// One frame of the panel's own display: a static **linear** ramp with the frame
+/// count on top.
+///
+/// Same shape as `gradient`, and for the same reason: column *n* is light level
+/// *n*, so every step is the same amount of light, which is what makes a wrong BCM
+/// weight visible as a kink instead of being smoothed away by gamma. The moving
+/// element is the alarm, and here it is the digit — it comes straight from the
+/// loop's counter, so a digit that stops ticking means the loop stopped, and a
+/// stopped loop over a stable ramp is unmistakable.
+fn draw(fb: &mut Fb, frames: u32) {
     fb.erase();
     let width = PANEL_WIDTH as u32;
+    let last = rp_hub75::color::LEVELS - 1;
     for row in 0..PANEL_HEIGHT as i32 {
         for column in 0..PANEL_WIDTH as i32 {
-            let step = (column as u32 + phase) % width;
-            let value = rp_hub75::color::gamma_step(step);
+            let value = rp_hub75::color::level(column as u32 * last / (width - 1));
             fb.set_pixel(Point::new(column, row), Rgb888::new(value, value, value));
         }
     }
+
     let style = MonoTextStyle::new(&FONT_6X10, Rgb888::new(255, 64, 0));
     let digit = [b'0' + (frames % 10) as u8];
     let _ = Text::new(

@@ -10,14 +10,25 @@
 //!
 //! `wait()` blocks until the swap has taken effect: the frame being scanned
 //! finishes on the outgoing buffer, the next one shows the incoming buffer, and
-//! the outgoing one is then handed straight back. Drawing and display never
-//! touch the same framebuffer, and the engine underneath is two DMA channels
-//! that hand off to each other for ever — no CPU, no interrupts, no drawing
-//! stalls.
+//! the outgoing one is then handed straight back. Drawing and display never touch
+//! the same framebuffer, and the engine underneath is one DMA channel whose
+//! completion interrupt walks the framebuffer’s own BCM sequence — so the panel
+//! keeps refreshing while this loop draws, and a swap never tears.
 //!
-//! What is on the panel: a moving gamma ramp with a marker dot, so a torn frame
-//! is visible as a discontinuity, a wrong BCM weight as a kink in the ramp, and
-//! a swap that never completes as the marker stopping.
+//! What is on the panel: a **static linear ramp** — column *n* is light level
+//! *n*, so every step is the same amount of light and the 64 steps can be
+//! compared in place. That is the BCM test: a plane with the wrong repetition
+//! count kinks the straight line at its boundary (levels 1, 2, 4, 8, 16, 32),
+//! and a plane that never lights flattens everything above its level.
+//!
+//! Gamma is deliberately **not** applied. It would make the ramp look even to the
+//! eye, which is what a UI wants, but it compresses the dark end and blurs
+//! exactly the steps being checked here. `rp_hub75::color::gamma_step` is there
+//! when the picture should look right rather than measure right.
+//!
+//! One red marker sweeps across it, and that marker is the other test: the loop
+//! only advances when each swap completes, so a marker that stops means the swap
+//! path has hung, and the frozen ramp makes that obvious.
 //!
 //! ```text
 //! # board in BOOTSEL mode:
@@ -41,7 +52,6 @@ use hub75_framebuffer::bitplane::plain::DmaFrameBuffer;
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;
 use rp_hub75::Hub75Pins;
-use rp_hub75::color::gamma_step;
 use rp_hub75::color::level;
 use rp_hub75::{PANEL_HEIGHT, PANEL_WIDTH, ROW_PAIRS, XTAL_FREQ_HZ};
 
@@ -69,8 +79,15 @@ const PLANES: usize = rp_hub75::BIT_DEPTH as usize;
 /// read ring, so a plane can live anywhere and is identified by its address.
 type Fb = DmaFrameBuffer<NROWS, WORDS_PER_ROW, PLANES>;
 
-static mut FB0: Fb = Fb::new();
-static mut FB1: Fb = Fb::new();
+/// A framebuffer aligned so the DMA's ring can repeat its segments: a ring wraps
+/// the power-of-two boundary containing an address, so aligning the buffer is
+/// what lets `reps` be repeated in hardware — 32 runs per refresh become 10 for
+/// this six-plane frame. Unaligned works too, just with more interrupts.
+#[repr(align(4096))]
+struct Aligned(Fb);
+
+static mut FB0: Aligned = Aligned(Fb::new());
+static mut FB1: Aligned = Aligned(Fb::new());
 
 #[hal::entry]
 fn main() -> ! {
@@ -103,8 +120,8 @@ fn main() -> ! {
     // SAFETY: both statics are taken exactly once, and each is handed to the
     // driver as a `&'static mut` — one of them is owned by the panel from here
     // on, and the other by this loop, strictly alternating.
-    let fb0: &'static mut Fb = unsafe { &mut *core::ptr::addr_of_mut!(FB0) };
-    let fb1: &'static mut Fb = unsafe { &mut *core::ptr::addr_of_mut!(FB1) };
+    let fb0: &'static mut Fb = unsafe { &mut (*core::ptr::addr_of_mut!(FB0)).0 };
+    let fb1: &'static mut Fb = unsafe { &mut (*core::ptr::addr_of_mut!(FB1)).0 };
 
     let hub75 = Hub75::new(
         pac.PIO0,
@@ -154,35 +171,42 @@ fn main() -> ! {
             }
         }
 
-        phase = phase.wrapping_add(3);
-        // About 15 frames a second, so the motion is easy to follow.
+        phase = phase.wrapping_add(1);
+        // About 15 frames a second, so a sweep across the panel takes ~4 s and
+        // a stop is obvious.
         let until = timer.get_counter().ticks() + 60_000;
         while timer.get_counter().ticks() < until {}
     }
 }
 
-/// A gamma ramp that slides across the panel, with a marker dot.
+/// A linear ramp across the panel, with a marker that sweeps right.
 ///
-/// The ramp spans all 64 levels through the gamma table, so a wrong BCM weight
-/// shows as a kink and a torn frame as a discontinuity. The marker moves with
-/// the ramp: if it stands still, a swap hung.
+/// The ramp is **static and linear**: column *n* is light level *n*, so every step
+/// is the same amount of light, and a wrong BCM weight shows as a kink that stays
+/// put instead of sliding past. No gamma: it would even out the very steps this
+/// exists to check.
+///
+/// The one moving thing is a red marker, and that is deliberate — it is the test.
+/// The loop only advances if each swap completes, so a marker that stops means the
+/// swap path has hung, and the frozen ramp makes it unmistakable.
 fn draw(fb: &mut Fb, phase: u32) {
     fb.erase();
     let width = PANEL_WIDTH as u32;
+    let last = rp_hub75::color::LEVELS - 1;
     for row in 0..PANEL_HEIGHT as i32 {
         for column in 0..PANEL_WIDTH as i32 {
-            let step = (column as u32 + phase) % width;
-            let value = gamma_step(step);
+            let value = level(column as u32 * last / (width - 1));
             fb.set_pixel(Point::new(column, row), Rgb888::new(value, value, value));
         }
     }
 
-    let marker_x = (width - 4) * phase / width;
-    let marker = Rgb888::new(level(rp_hub75::color::LEVELS - 1), 0, 0);
+    // Two columns wide and four rows tall: big enough to spot at a glance, small
+    // enough to leave the ramp readable behind it.
+    let marker = Rgb888::new(level(last), 0, 0);
+    let x = (phase % width) as i32;
     for row in 0..4 {
-        for column in 0..4 {
-            let x = (marker_x + column) % width;
-            fb.set_pixel(Point::new(x as i32, 2 + row), marker);
+        for column in 0..2 {
+            fb.set_pixel(Point::new((x + column) % width as i32, row), marker);
         }
     }
 }
