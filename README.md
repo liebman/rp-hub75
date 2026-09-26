@@ -123,12 +123,11 @@ engine it replaced measured 985/s on the same panel: 13.5 interrupts a refresh,
 where its own banner said 17, because the ring it used depended on where the linker
 put the framebuffers. Neither that engine nor the ring is in the crate any more.
 See [plan.md](plan.md) for what is done and what is next, and [NOTES.md](NOTES.md)
-for the measurements and the datasheet facts the design rests on — including what
-is still unverified: the panel clock ceiling, and the strobe edge and address order
-as *measurements* rather than as a picture that looks right. `ladder`'s rungs are
-the instrument for the last two: they cycle and announce themselves over RTT
-(verified on the bench), and the pass itself — an eye on the five patterns — has not
-been made yet.
+for the measurements and the datasheet facts the design rests on. The ladder has now
+been read off the panel — all five rungs as they should be, which closes M3's
+read-back and settles the latch edge (this panel takes the row on `STB`'s falling
+edge) and the R0/G0/B0 colour order. What is still unverified is the panel clock
+ceiling: the ladder at a faster divider, and an analyser for the number.
 
 ## Layout
 
