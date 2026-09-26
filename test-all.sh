@@ -11,7 +11,8 @@ set -e
 #
 # The polarity features change what the crate compiles — the clock edge, and the
 # level that blanks the panel — so the tests run once per combination. `20mhz` is
-# an example feature and changes nothing here.
+# an example feature and changes nothing here, and the library does not log: the
+# examples own the log, through defmt as a dev-dependency.
 HOST_TARGET=$(rustc -vV | sed -n 's/^host: //p')
 
 for features in "" "invert-clock" "invert-oe" "invert-clock,invert-oe"; do
@@ -25,14 +26,6 @@ for features in "" "invert-clock" "invert-oe" "invert-clock,invert-oe"; do
     echo "=========================================="
     cargo test --lib --target "$HOST_TARGET" "${extra[@]}"
 done
-
-# The library logs through defmt on the target and compiles those calls out on the
-# host, so `default = ["defmt"]` costs the harness nothing. This pass proves the
-# silent build compiles too, with no defmt dependency in the graph at all.
-echo "=========================================="
-echo "Host tests, no logging: cargo test --lib --target $HOST_TARGET --no-default-features"
-echo "=========================================="
-cargo test --lib --target "$HOST_TARGET" --no-default-features
 
 echo "=========================================="
 echo "All tests succeeded!"

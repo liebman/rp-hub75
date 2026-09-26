@@ -100,8 +100,8 @@ const RUNG_MS: u64 = 2_000;
 /// `20mhz` feature.
 ///
 /// The driver rounds the divider up, so what the panel runs at is this or the next
-/// slower divider's clock — the driver's own log line is the truth, not this
-/// number.
+/// slower divider's clock — `Hub75::panel_clock` and `Hub75::divider` are the
+/// truth, not this number.
 const PANEL_CLOCK: Rate<u32, 1, 1> =
     Rate::<u32, 1, 1>::MHz(if cfg!(feature = "20mhz") { 20 } else { 10 });
 
@@ -176,7 +176,7 @@ fn main() -> ! {
         if now >= deadline {
             rung = (rung + 1) % RUNGS.len();
             deadline = now + RUNG_MS * 1_000;
-            rp_hub75::log_info!("{}", RUNGS[rung]);
+            defmt::info!("{}", RUNGS[rung]);
         }
 
         draw(fb, rung);

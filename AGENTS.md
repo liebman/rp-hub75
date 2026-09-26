@@ -69,8 +69,8 @@ lines: each one is shaped around the bare-metal target.
 
 | command | what, and why |
 |---|---|
-| `./test-all.sh` | Host unit tests. The default target is `thumbv8m.main-none-eabihf`, where tests cannot *run*, so the script asks for the host triple explicitly. Runs the four polarity combinations plus one `--no-default-features` pass. |
-| `./build-all.sh` | `cargo build-arm` (= `build --release`) for the library and every example, in the four polarity combinations, plus the `--no-default-features` (silent) library and examples. |
+| `./test-all.sh` | Host unit tests. The default target is `thumbv8m.main-none-eabihf`, where tests cannot *run*, so the script asks for the host triple explicitly. Runs the four polarity combinations. |
+| `./build-all.sh` | `cargo build-arm` (= `build --release`) for the library and every example, in the four polarity combinations. |
 | `./clippy-all.sh` | `cargo clippy --release --lib --examples`. Not `--all-targets`: the test harness needs `core::test`, which does not exist for this target. Same feature passes as `build-all.sh`. |
 | `./fmt-all.sh` | `cargo fmt --all`, then `--check`. Do not add a `rustfmt.toml` without agreeing on it. |
 | `cargo run-arm --example gradient` | Builds, flashes and runs over the debug probe (`probe-rs run --chip RP235x`), and streams the `defmt` log back on the same terminal. Without a probe, flash over the USB-C bootloader instead: hold BOOT, tap RESET, `picotool load -u -v -x -t elf <elf>`. |
@@ -86,23 +86,24 @@ unverified until it is flashed; say so rather than implying otherwise.
 ### Logging
 
 `defmt` over RTT, through the debug probe: `cargo run-arm --example <name>` prints
-it. Four rules come with that.
+it. The examples own the log — `defmt`, `defmt-rtt` and `panic-probe` are
+dev-dependencies, and a log line is a plain `defmt::info!` — so three rules come
+with that.
 
-* **The interrupt never logs.** `defmt`'s `acquire` is a critical section, and
-  `on_dma_irq` runs once a frame with the picture waiting on it. The driver logs
-  its startup and nothing else; examples log from their own loops.
+* **The library does not log, and nothing logs from an interrupt.** `defmt`'s
+  `acquire` is a critical section, and `on_dma_irq` runs once a frame with the
+  picture waiting on it. The driver reports its numbers through accessors —
+  `divider`, `panel_clock`, `refresh_hz`, `runs_per_refresh` and `pins` — and
+  examples read them from their own loops.
 * **`defmt-rtt` must keep `disable-blocking-mode`.** probe-rs puts RTT into
   blocking mode, so a host that stops reading would block a log call — and a
   blocked display loop is the frozen panel this project has already met twice.
   Dropping a frame is the right failure.
-* **The library's logging is the `defmt` feature, on by default**, and its call
-  sites are gated on the target as well as the feature, because the host test
-  harness links without `defmt.x`. `--no-default-features` builds a silent driver;
-  both passes are in the scripts.
-* **`log_info!` is a `pub use` of `defmt::info`, not a wrapper.** A `macro_rules!`
-  that forwards to `defmt::info!` resolves `file!()` and `line!()` inside the macro,
-  so every line in the log reports `lib.rs` and the definition's line. Re-exporting
-  keeps the caller's location, which is most of the value of a boot log.
+* **A log line formats the examples' primitives only.** `rp235x-hal` wants
+  `defmt <0.4` and `hub75-framebuffer` wants `1.0`, and two defmt majors cannot
+  share an image, so neither crate's own defmt feature can be turned on — a value
+  out of either has no `Defmt` impl, and `to_Hz()` of a `Rate` is how the driver's
+  own numbers reach the log.
 
 ## Conventions
 

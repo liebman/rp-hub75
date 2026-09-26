@@ -10,8 +10,9 @@
 //!   the frame count one for one.
 //! * **Telemetry** over RTT, because GP0/GP1 are panel data and there is no UART:
 //!   frames, interrupts and swaps once a second, through `defmt` to the debug
-//!   probe. The driver's own startup lines come out of the same channel, so one
-//!   `probe-rs run` shows the configuration and the counters together.
+//!   probe. The startup line reads the driver's own numbers — divider, panel
+//!   clock, refresh rate and runs a refresh — so one `probe-rs run` shows the
+//!   configuration and the counters together.
 //!
 //! The panel shows a static *linear* ramp — equal light per column, no gamma, so
 //! a wrong BCM weight kinks the line — with the loop's frame count on top, and
@@ -208,12 +209,14 @@ fn main() -> ! {
     let mut frames: u32 = 0;
     let mut swaps: u32 = 0;
 
-    rp_hub75::log_info!(
-        "telemetry: {}x{}, {} planes, {} Hz refresh, {} runs a refresh, one \
-         interrupt a frame",
+    defmt::info!(
+        "telemetry: {}x{}, {} planes, divider /{}, {} Hz panel clock, {} Hz refresh, {} \
+         runs a refresh, one interrupt a frame",
         PANEL_WIDTH,
         PANEL_HEIGHT,
         BIT_DEPTH,
+        hub75.divider(),
+        hub75.panel_clock().to_Hz(),
         hub75.refresh_hz(),
         hub75.runs_per_refresh()
     );
@@ -243,7 +246,7 @@ fn main() -> ! {
         if now - last_report >= 1_000_000 {
             last_report = now;
             reports += 1;
-            rp_hub75::log_info!(
+            defmt::info!(
                 "report {}: {} frames, {} irqs, {} swaps",
                 reports,
                 frames,

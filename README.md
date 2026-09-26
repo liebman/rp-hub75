@@ -106,6 +106,13 @@ RTT, back up the probe's wire. The old path was USB CDC, which needed no probe b
 could stall the display loop on a host that stopped reading; RTT drops a frame
 instead, and that is the one thing a log must never do to a panel.
 
+The examples own the log: `defmt`, `defmt-rtt` and `panic-probe` are
+dev-dependencies and a log line is a plain `defmt::info!`. The library logs nothing,
+so its numbers reach the log through its accessors (`divider`, `panel_clock`,
+`refresh_hz`, `runs_per_refresh`), which is where `telemetry`'s startup line reads
+them. Neither dependency's own defmt feature can be turned on — the hal wants
+`defmt <0.4`, the framebuffer `1.0`, and two majors cannot share an image.
+
 ## Status
 
 The engine is the descriptor one, and it is flashed: 32 runs a refresh played by a
