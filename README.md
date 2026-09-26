@@ -56,7 +56,7 @@ loop {
 
 | example | what |
 |---|---|
-| `gradient` | the display from `esp-hub75`'s gradient demo: three colour ramps (red, green, blue, one light level per column) and a status block whose labels are left-justified while the values are right-justified — refresh rate, render time, the interrupt rate, and a counter ticking ten times a second, which is also the heartbeat. The interrupt rate is the panel's own check on the engine: measured, not derived, so it should read `runs_per_refresh()` × the refresh rate — and a lost DMA ring would show as 32 runs a refresh instead of 10 |
+| `gradient` | the display from `esp-hub75`'s gradient demo: three colour ramps (red, green, blue, one light level per column) and a status block whose labels are left-justified while the values are right-justified — refresh rate, render time, the interrupts a frame, and a counter ticking ten times a second, which is also the heartbeat. Interrupts a frame is the engine's own count of the runs in one refresh, `runs_per_refresh()` — 10 here, or 32 if the DMA's ring is not applying |
 | `telemetry` | the same engine and panel pattern, with `wait_for_done().await` and fps/interrupt/swap counters over USB CDC (the digit on the panel is the loop’s frame count) |
 | `ghost` | a ghosting / bleed probe: four phases — a blinking dot, a raster, a diagonal and a sweeping bar — that make row bleed (adjacent, and across the frame boundary) and column bleed visible, and name their direction |
 

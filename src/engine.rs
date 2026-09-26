@@ -16,13 +16,13 @@
 //! cannot name the framebuffer's type: it keeps a [`Plan`] (the static
 //! `(len, reps)` sequence, copied) and a table of **byte offsets** relative to
 //! the framebuffer's base. The offset table is what makes a framebuffer swap a
-//! single delta — and it is *checked* at init (every segment must lie inside the
-//! framebuffer) rather than assumed.
+//! single delta — and it is *checked* at init: every segment must lie inside the
+//! framebuffer.
 //!
 //! The two things a driver does need to know about a layout are derived here and
-//! reported, never hard-coded: [`Plan::runs_per_refresh`] (the interrupt load)
-//! and [`shortest_run_bytes`] (how long the interrupt has to re-arm before the
-//! PIO starves).
+//! reported: [`Plan::runs_per_refresh`] (the interrupt load) and
+//! [`shortest_run_bytes`] (how long the interrupt has to re-arm before the PIO
+//! starves).
 
 use hub75_framebuffer::BCM_SEQUENCE_CAPACITY;
 use hub75_framebuffer::BcmLenReps;
@@ -97,9 +97,8 @@ impl Plan {
     /// Runs the interrupt has to service **per refresh** if nothing is repeated
     /// in hardware — the crate's `bcm_rep_count`.
     ///
-    /// Counted over the whole refresh, not one sequence: a row-major layout
-    /// repeats its sequence once per row, so its runs are `NROWS` times the
-    /// sequence's.
+    /// A total over the whole refresh: a row-major layout repeats its sequence
+    /// once per row, so its runs are `NROWS` times the sequence's.
     pub fn runs_per_refresh(&self) -> usize {
         (0..self.count).map(|i| self.entry(i).reps).sum()
     }
@@ -161,13 +160,12 @@ pub fn shortest_run_bytes<FB: FrameBuffer>() -> usize {
 /// therefore be the address the hardware sees: aligning an *offset* is not the
 /// same thing, since a framebuffer base is not necessarily aligned itself.
 ///
-/// Both conditions are tested against the layout the crate actually produced;
-/// nothing is assumed about planes, rows or strides. When a ring applies, `reps`
-/// costs no interrupts at all. When it does not — the common case for a frame
-/// whose segments are suffixes of unequal, mostly non-power-of-two length — the
-/// engine re-arms once per repetition. Aligning the framebuffer (a
-/// `#[repr(align(N))]` wrapper) is what turns the last, most-repeated segments
-/// of such a frame into single runs.
+/// Both conditions are tested against the `len` and `address` the crate's own
+/// sequence reported. When a ring applies, `reps` costs no interrupts at all.
+/// When it does not — the common case for a frame whose segments are suffixes of
+/// unequal, mostly non-power-of-two length — the engine re-arms once per
+/// repetition. Aligning the framebuffer (a `#[repr(align(N))]` wrapper) is what
+/// turns the last, most-repeated segments of such a frame into single runs.
 pub fn ring_bytes(len: usize, address: u32) -> u32 {
     if len > 1 && len.is_power_of_two() && len <= 32768 && address % len as u32 == 0 {
         len as u32

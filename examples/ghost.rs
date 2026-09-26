@@ -82,8 +82,8 @@ struct Aligned(Fb);
 /// `AtomicBool` cannot lower 4096 — which in turn puts the framebuffer behind it
 /// on a 4096-byte boundary of its own.
 ///
-/// Checked rather than assumed: the failure would be a quiet one, the panel still
-/// working, just for 32 runs a refresh instead of 10.
+/// Asserted at compile time: without it the panel still refreshes, but for 32
+/// runs a refresh instead of 10.
 const _: () = assert!(core::mem::align_of::<static_cell::StaticCell<Aligned>>() == 4096);
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.

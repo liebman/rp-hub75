@@ -56,10 +56,9 @@
 //!
 //! **One FIFO word per column.** `pull_threshold` is [`PULL_THRESHOLD`], the
 //! fourteen bits one `out pins, 14` shifts out, so the OSR refills exactly on a
-//! column boundary and the word's fields cannot drift. Sixteen — the obvious
-//! value, and one word — would leave the word's two spare top bits in the OSR
-//! and put every following word two bits out of place, which is the M2b
-//! confetti in a new costume.
+//! column boundary and the word's fields cannot drift. Sixteen would leave the
+//! word's two spare top bits in the OSR and put every following word two bits out
+//! of place, which is the M2b confetti in a new costume.
 //!
 //! # The one hair: bit 11
 //!
@@ -115,9 +114,10 @@ pub const LATCH_BIT: u16 = 1 << pins::STB;
 /// Bit of a framebuffer word that drives [`pins::OE`].
 ///
 /// The pin is active low, so this bit *set* means the outputs are off — which is
-/// what `hub75-framebuffer` uses as its blanking level by default. See
-/// [`crate::table::BLANK_WORD`] for the one place the driver depends on that
-/// convention.
+/// what `hub75-framebuffer` uses as its blanking level by default. The driver
+/// streams the framebuffer's own words and nothing else, so that convention *is*
+/// the blanking behavior; the crate's `invert-oe` feature is the only switch for
+/// a panel whose output enable is active high.
 pub const OE_BIT: u16 = 1 << pins::OE;
 
 /// `pull_threshold` for the stream program: the fourteen bits of the word that

@@ -4,9 +4,9 @@
 //! on top:
 //!
 //! * **The interrupt.** One per run, and it is what keeps the picture moving —
-//!   the ISR walks the framebuffer's BCM sequence and re-arms the channel, so
-//!   this example's handler is the refresh. The `irqs` column is that count:
-//!   runs per refresh times frames per second.
+//!   the ISR walks the framebuffer's BCM sequence and re-arms the channel, so this
+//!   example's handler is the refresh. The `irqs` column counts its entries since
+//!   the last report: one run, one interrupt.
 //! * **Telemetry** over USB CDC, because GP0/GP1 are panel data and there is no
 //!   UART: fps, the interrupt count and the swap count, once a second. The
 //!   writes are bounded and drop lines rather than block the loop — telemetry
@@ -84,8 +84,8 @@ struct Aligned(Fb);
 /// `AtomicBool` cannot lower 4096 — which in turn puts the framebuffer behind it
 /// on a 4096-byte boundary of its own.
 ///
-/// Checked rather than assumed: the failure would be a quiet one, the panel still
-/// working, just for 32 runs a refresh instead of 10.
+/// Asserted at compile time: without it the panel still refreshes, but for 32
+/// runs a refresh instead of 10.
 const _: () = assert!(core::mem::align_of::<static_cell::StaticCell<Aligned>>() == 4096);
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
@@ -108,9 +108,9 @@ static IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
 /// The application's half of the wake-up contract.
 ///
 /// The line must be the one named in `Hub75Config::with_wake_irq`; the driver
-/// cannot check that, so the two are documented together here. Counting the
-/// interrupts is what makes the handler's effect visible in the telemetry: with
-/// no swap in flight there is nothing to count.
+/// cannot check that, so the two are documented together here. The `irqs` column
+/// reports this handler's own count, so a stalled engine shows up as a number
+/// that stops rising.
 ///
 /// The handler *is* the vector-table symbol. `rp235x-hal` does not re-export
 /// `cortex_m_rt::interrupt`, and that macro in device mode resolves a crate
@@ -315,8 +315,8 @@ fn main() -> ! {
                 usb_dev: &mut usb_dev,
                 serial: &mut serial,
             };
-            // The irqs column is now the engine's own heartbeat: one interrupt
-            // per run, so it should sit at runs/refresh × frames per second.
+            // One interrupt per run, so this count sits at runs/refresh × frames
+            // per second.
             let _ = write!(
                 logger,
                 "{:>4}  {:>5}  {:>4}  {:>11}\r\n",

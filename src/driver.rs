@@ -24,7 +24,7 @@
 //! (`bitplane::plain::frame`), a row-major (`bitplane::plain::row`), a threshold
 //! or a remapped framebuffer all drive the same code, with the same swap, and
 //! the layout only changes the *cost* — [`Hub75::runs_per_refresh`] and
-//! [`Hub75::shortest_run`] report it.
+//! [`crate::engine::shortest_run_bytes`] report it.
 //!
 //! Two registers change per run. `READ_ADDR` is written through a non-trigger
 //! alias, then `TRANS_COUNT` through `AL1_TRANS_COUNT_TRIG` — whose trigger
@@ -35,15 +35,15 @@
 //!
 //! `reps` usually means one run per repetition. Where the layout allows it —
 //! the region is a power of two *and* the pointer is aligned to it, which is
-//! checked per run and never assumed — the driver asks the DMA's ring to repeat
-//! the segment instead, and one run covers all `reps`.
+//! checked per run — the driver asks the DMA's ring to repeat the segment
+//! instead, and one run covers all `reps`.
 //!
-//! # The cost, honestly
+//! # The cost
 //!
 //! The interrupt is **load-bearing**: it *is* the refresh. A blocked interrupt
-//! pauses the picture (the PIO holds its last word and the panel keeps its
-//! latched row) rather than corrupting it, and the shortest run of a layout is
-//! the deadline the interrupt has to meet — 109 µs plane-major, 3.4 µs
+//! pauses the picture, because the PIO holds its last word and the panel keeps
+//! its latched row; it cannot corrupt the picture. The shortest run of a layout
+//! is the deadline the interrupt has to meet: 109 µs plane-major, 3.4 µs
 //! row-major on this panel. Steady state is [`Hub75::runs_per_refresh`] runs per
 //! refresh: 32 for a six-plane plane-major frame (~4.6 k/s), 1024 for row-major
 //! before the ring paths are counted.
