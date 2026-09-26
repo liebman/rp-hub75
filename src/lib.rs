@@ -48,18 +48,21 @@
 //! touches the panel while the refresh runs. See [`programs`] for the program,
 //! the pin layout and the one invariant it rests on.
 //!
-//! Feeding that FIFO is [`driver`]'s **one** DMA channel, re-armed by its
-//! completion interrupt: each run streams one segment of the framebuffer's own
-//! BCM sequence — `len` bytes, `reps` times — and [`engine`] is the cursor that
-//! walks it. Where the layout allows it (a power of two, aligned to it, checked
-//! per run) the DMA's ring repeats a segment in hardware instead.
+//! Feeding that FIFO is [`driver`]'s pair of DMA channels: a **control** channel
+//! plays a [`descriptor`] table — the framebuffer's own BCM sequence, one entry
+//! per run, then a terminator — into the data channel's `AL3` register block,
+//! and the data channel chains back to it on every completion. The CPU does
+//! nothing between frames: the chain re-arms itself as often as the frame needs,
+//! and the terminator's zero word is the one interrupt, at the frame boundary
+//! where a buffer swap belongs. [`descriptor::MAX_DESCRIPTORS`] bounds the
+//! table; 32 entries cover a six-plane plane-major frame at any panel geometry.
 //!
 //! The sequence *is* the frame: brightness lives in the framebuffer's memory
 //! layout rather than in a register, so a plane-major, row-major, threshold or
 //! remapped framebuffer all drive the same code and the layout only changes the
 //! cost, which [`Hub75::runs_per_refresh`] reports. Six planes at an 18.75 MHz
 //! panel clock is 63 panel scans a refresh — 6.9 ms, ≈143 Hz — for 32 runs
-//! plane-major, or 1024 row-major before the ring paths are counted.
+//! plane-major, or 1024 row-major.
 //!
 //! See `NOTES.md` for the measurements and the register facts this rests on,
 //! and `plan.md` for what is done and what is next.
@@ -67,8 +70,8 @@
 #![no_std]
 
 pub mod color;
+pub mod descriptor;
 pub mod driver;
-pub mod engine;
 pub mod pins;
 pub mod programs;
 

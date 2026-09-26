@@ -3,12 +3,13 @@
 //! The same display as `../esp-hub75/examples/gradient`: three horizontal colour
 //! ramps across the top of the panel — red, then green, then blue, one step per
 //! column — and four status lines below them showing the refresh rate, how long
-//! the last frame took to draw, the driver's interrupts a frame, and a counter
+//! the last frame took to draw, the descriptor table's runs a frame, and a counter
 //! that ticks ten times a second.
 //!
-//! The interrupts line is *per frame*: `runs_per_refresh()`, the runs in one
-//! refresh of the framebuffer's BCM sequence, with the DMA's ring repeats
-//! already folded in. It reads 10 here; 32 means the ring is not applying.
+//! The status block's third line is the descriptor table's length,
+//! `runs_per_refresh()` — 32 runs for this frame, one entry per repetition — and
+//! it is the layout's number, not the panel's. One interrupt plays them all: the
+//! table's terminator, once a frame.
 //!
 //! Labels are left-justified and values right-justified, as two pieces of text on
 //! one line. `FONT_5X7` advances five pixels per character, so esp's single padded
@@ -63,21 +64,13 @@ const NROWS: usize = ROW_PAIRS;
 const WORDS_PER_ROW: usize = PANEL_WIDTH;
 const PLANES: usize = BIT_DEPTH as usize;
 
-type Fb = DmaFrameBuffer<NROWS, WORDS_PER_ROW, PLANES>;
-
-/// Aligned so the DMA's ring can repeat segments (see `ghost`).
-#[repr(align(4096))]
-struct Aligned(Fb);
-
-/// The DMA ring repeats a segment only while the framebuffer's *address* stays
-/// aligned, so the cell has to keep the wrapper's alignment: it does, because
-/// alignment is the maximum over a struct's fields and `static_cell`'s
-/// `AtomicBool` cannot lower 4096 — which in turn puts the framebuffer behind it
-/// on a 4096-byte boundary of its own.
+/// The framebuffer type this example uses: `hub75-framebuffer`'s plane-major
+/// layout, whose words are the panel's own pin levels.
 ///
-/// Asserted at compile time: without it the panel still refreshes, but for 32
-/// runs a refresh instead of 10.
-const _: () = assert!(core::mem::align_of::<static_cell::StaticCell<Aligned>>() == 4096);
+/// The two of them are plain statics, and that costs nothing: the engine names
+/// each run's address in the descriptor table, so neither a framebuffer's address
+/// nor its alignment changes the picture or the interrupt load.
+type Fb = DmaFrameBuffer<NROWS, WORDS_PER_ROW, PLANES>;
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
 ///
@@ -154,14 +147,13 @@ fn main() -> ! {
 
     // One framebuffer is the panel's at any moment and the other is this loop's;
     // a swap exchanges them.
-    let aligned0 = mk_static!(Aligned, Aligned(Fb::new()));
-    let aligned1 = mk_static!(Aligned, Aligned(Fb::new()));
-    let fb0: &'static mut Fb = &mut aligned0.0;
-    let fb1: &'static mut Fb = &mut aligned1.0;
+    let fb0: &'static mut Fb = mk_static!(Fb, Fb::new());
+    let fb1: &'static mut Fb = mk_static!(Fb, Fb::new());
 
     let hub75 = Hub75::new(
         pac.PIO0,
         dma.ch0,
+        dma.ch1,
         &mut pac.RESETS,
         Hub75Pins::new(
             pins.gpio0,
@@ -227,7 +219,7 @@ fn main() -> ! {
 }
 
 /// The display: three colour ramps and the status block.
-fn draw(fb: &mut Fb, refresh_hz: u32, render_ms: u32, irq_per_frame: u32, counter: u32) {
+fn draw(fb: &mut Fb, refresh_hz: u32, render_ms: u32, runs_per_frame: u32, counter: u32) {
     fb.erase();
 
     // Red, green and blue ramps. `x * STEP` walks an 8-bit channel, which at this
@@ -270,8 +262,8 @@ fn draw(fb: &mut Fb, refresh_hz: u32, render_ms: u32, irq_per_frame: u32, counte
         fb,
         style,
         LINE1,
-        "IRQ/f:",
-        decimal(&mut value, irq_per_frame, b""),
+        "Runs/f:",
+        decimal(&mut value, runs_per_frame, b""),
     );
     line(
         fb,

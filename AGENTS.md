@@ -10,8 +10,9 @@ A `no_std` HUB75 LED matrix driver for the **RP2350**. The **Pimoroni Interstate
 75 W** (64×64, 1/32 scan) is the *reference board* — where the pin map comes from
 and where every measurement in `NOTES.md` was taken — not the only target. One
 PIO state machine streams a `hub75-framebuffer` bitplane framebuffer straight at
-the panel, fed by one DMA channel that its own completion interrupt re-arms; the
-CPU does nothing while the panel refreshes. Edition 2024, `rust-version = 1.85`,
+the panel, fed by two DMA channels that hand the picture to each other: one plays
+a descriptor table into the other's registers, and the CPU does nothing between
+frames. Edition 2024, `rust-version = 1.85`,
 no allocator.
 
 Two facts decide most changes:
@@ -19,9 +20,9 @@ Two facts decide most changes:
 * A framebuffer word **is** the bus. With `hub75-framebuffer`'s `interstate75`
   layout, bit *n* is pin *n*, so one `out pins, 14` drives the six colour bits,
   the row address, the latch, and the output enable. See `src/programs.rs`.
-* The sequence **is** the frame. The driver streams the framebuffer's own BCM
-  sequence, run by run, and knows nothing about planes, rows, or their lengths.
-  See `src/engine.rs`.
+* The sequence **is** the frame. The driver plays the framebuffer's own BCM
+  sequence from a descriptor table — one entry per run, then a terminator — and
+  knows nothing about planes, rows, or their lengths. See `src/descriptor.rs`.
 
 ### Pins
 
@@ -44,7 +45,7 @@ startup, is open work — see `plan.md`.
 | path | what |
 |---|---|
 | `src/driver.rs` | `Hub75`, `Hub75Config`, `Hub75Pins`, `Hub75Swap`, `on_dma_irq` |
-| `src/engine.rs` | the BCM sequence as a plan, the cursor that walks it, the ring decision |
+| `src/descriptor.rs` | the engine: the frame as a descriptor table a control channel plays into the data channel's `AL3` block |
 | `src/programs.rs` | the PIO program, the word↔pin layout, the panel model tests |
 | `src/color.rs` | `level`, `grey`, `gamma_step` for a `BIT_DEPTH`-bit panel |
 | `src/pins.rs` | the reference wiring: the Interstate 75 W pin map (GP0–GP13) |

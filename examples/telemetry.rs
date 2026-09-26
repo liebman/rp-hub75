@@ -3,10 +3,11 @@
 //! The same driver as `gradient`, with the two things a real application wants
 //! on top:
 //!
-//! * **The interrupt.** One per run, and it is what keeps the picture moving —
-//!   the ISR walks the framebuffer's BCM sequence and re-arms the channel, so this
-//!   example's handler is the refresh. The `irqs` column counts its entries since
-//!   the last report: one run, one interrupt.
+//! * **The interrupt.** One per frame, and it is the only one: the control
+//!   channel plays the descriptor table and the data channel chains back to it,
+//!   so the handler runs at the terminator — to apply a swap and restart the
+//!   chain — and nowhere else. The `irqs` column counts its entries, so it
+//!   should track the `frame` column one for one.
 //! * **Telemetry** over USB CDC, because GP0/GP1 are panel data and there is no
 //!   UART: fps, the interrupt count and the swap count, once a second. The
 //!   writes are bounded and drop lines rather than block the loop — telemetry
@@ -65,28 +66,14 @@ const NROWS: usize = ROW_PAIRS;
 const WORDS_PER_ROW: usize = PANEL_WIDTH;
 const PLANES: usize = BIT_DEPTH as usize;
 
+/// The framebuffer type this example uses: `hub75-framebuffer`'s plane-major
+/// layout, whose words are the panel's own pin levels.
+///
+/// The two of them are plain statics, and that costs nothing: the engine names
+/// each run's address in the descriptor table, so neither a framebuffer's address
+/// nor its alignment changes the picture or the interrupt load.
 type Fb = DmaFrameBuffer<NROWS, WORDS_PER_ROW, PLANES>;
 type UsbBus = hal::usb::UsbBus;
-
-/// A framebuffer aligned so the DMA's ring can repeat its segments.
-///
-/// A ring wraps the power-of-two boundary *containing an address*, so an aligned
-/// framebuffer is what lets `reps` be repeated in hardware: with it, this frame's
-/// 32 runs per refresh become 10 (planes 4 and 5, the 8- and 16-rep segments,
-/// collapse into one run each). Unaligned works exactly the same, just for more
-/// interrupts — `Hub75::runs_per_refresh()` reports whichever is true.
-#[repr(align(4096))]
-struct Aligned(Fb);
-
-/// The DMA ring repeats a segment only while the framebuffer's *address* stays
-/// aligned, so the cell has to keep the wrapper's alignment: it does, because
-/// alignment is the maximum over a struct's fields and `static_cell`'s
-/// `AtomicBool` cannot lower 4096 — which in turn puts the framebuffer behind it
-/// on a 4096-byte boundary of its own.
-///
-/// Asserted at compile time: without it the panel still refreshes, but for 32
-/// runs a refresh instead of 10.
-const _: () = assert!(core::mem::align_of::<static_cell::StaticCell<Aligned>>() == 4096);
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
 ///
@@ -102,7 +89,9 @@ macro_rules! mk_static {
     }};
 }
 
-/// Interrupts the panel's control channel has raised.
+/// Interrupts the panel's DMA completion handler has raised.
+///
+/// One a frame, at the descriptor table's terminator.
 static IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// The application's half of the wake-up contract.
@@ -236,31 +225,34 @@ fn main() -> ! {
 
     // One framebuffer is the panel's at any moment and the other is this loop's;
     // a swap exchanges them.
-    let aligned0 = mk_static!(Aligned, Aligned(Fb::new()));
-    let aligned1 = mk_static!(Aligned, Aligned(Fb::new()));
-    let fb0: &'static mut Fb = &mut aligned0.0;
-    let fb1: &'static mut Fb = &mut aligned1.0;
+    let fb0: &'static mut Fb = mk_static!(Fb, Fb::new());
+    let fb1: &'static mut Fb = mk_static!(Fb, Fb::new());
 
+    let hub75_pins = Hub75Pins::new(
+        pins.gpio0,
+        pins.gpio1,
+        pins.gpio2,
+        pins.gpio3,
+        pins.gpio4,
+        pins.gpio5,
+        pins.gpio6,
+        pins.gpio7,
+        pins.gpio8,
+        pins.gpio9,
+        pins.gpio10,
+        pins.gpio11,
+        pins.gpio12,
+        pins.gpio13,
+    );
+
+    // One engine, one panel, one interrupt a frame: the control channel plays the
+    // descriptor table and the data channel chains back to it.
     let hub75 = Hub75::new(
         pac.PIO0,
         dma.ch0,
+        dma.ch1,
         &mut pac.RESETS,
-        Hub75Pins::new(
-            pins.gpio0,
-            pins.gpio1,
-            pins.gpio2,
-            pins.gpio3,
-            pins.gpio4,
-            pins.gpio5,
-            pins.gpio6,
-            pins.gpio7,
-            pins.gpio8,
-            pins.gpio9,
-            pins.gpio10,
-            pins.gpio11,
-            pins.gpio12,
-            pins.gpio13,
-        ),
+        hub75_pins,
         clocks.system_clock.freq(),
         Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock(PANEL_CLOCK),
         fb0,
@@ -315,8 +307,7 @@ fn main() -> ! {
                 usb_dev: &mut usb_dev,
                 serial: &mut serial,
             };
-            // One interrupt per run, so this count sits at runs/refresh × frames
-            // per second.
+            // One interrupt a frame, so this count tracks the frame count.
             let _ = write!(
                 logger,
                 "{:>4}  {:>5}  {:>4}  {:>11}\r\n",
@@ -338,9 +329,10 @@ impl fmt::Display for Banner<'_> {
         write!(
             f,
             "\r\npanel {}x{}, {} planes, {} Hz refresh, divider /{}\r\n\
-             {} runs per refresh — one interrupt each, with the DMA's ring\r\n\
-             repeats already folded in — walked from the framebuffer's own BCM\r\n\
-             sequence; a swap is armed every frame\r\n\
+             {} runs a refresh, played by a descriptor table — the\r\n\
+             framebuffer's own BCM sequence, one entry per repetition,\r\n\
+             and one interrupt a frame at its terminator; a swap is armed\r\n\
+             every frame\r\n\
              report  frame   irqs    swap_waited\r\n",
             PANEL_WIDTH,
             PANEL_HEIGHT,

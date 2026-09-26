@@ -1,61 +1,53 @@
-//! The driver: one PIO state machine, one DMA channel, and an interrupt per run.
+//! The driver: one PIO state machine, two DMA channels, and one interrupt a
+//! frame.
 //!
 //! # What runs the panel
 //!
 //! A single state machine streams framebuffer words straight at GP0-13 (see
-//! [`crate::programs`]), fed by **one** DMA channel whose runs the DMA
-//! completion interrupt re-arms:
+//! [`crate::programs`]). A **control** DMA channel plays a [`crate::descriptor`]
+//! table into the data channel's `AL3` register block, and the data channel
+//! chains back to it on every completion, so the two hand the picture to each
+//! other in hardware:
 //!
 //! ```text
-//!   run: len bytes at the segment's pointer, to the PIO FIFO, DREQ-paced
-//!        │
-//!        └── completes → IRQ → the ISR programs the next run and returns
+//! control channel  (trans_count, read_addr) → the data channel's AL3 block
+//!                  the read address starts the run
+//! data channel     streams the run to the PIO FIFO, paced by its DREQ
+//!                  completes, chains to the control channel
 //! ```
 //!
-//! The sequence of runs is the framebuffer's own BCM sequence — the very thing
-//! [`FrameBuffer`] describes — walked by [`crate::engine`]:
+//! The table is the framebuffer's own BCM sequence, materialised by
+//! [`crate::descriptor::fill`]: one entry per repetition of every segment, in
+//! scan order, then a terminator. Nothing here knows what a plane or a row is: a
+//! plane-major (`bitplane::plain::frame`), a row-major (`bitplane::plain::row`),
+//! a threshold or a remapped framebuffer all drive the same code, with the same
+//! swap, and the layout only changes the *cost*, which
+//! [`Hub75::runs_per_refresh`] reports.
 //!
-//! ```text
-//! for index in 0..FB::bcm_segment_count():
-//!     stream FB::bcm_segment(index) — len bytes — reps times
-//! ```
+//! # One interrupt per frame
 //!
-//! Nothing here knows what a plane or a row is: a plane-major
-//! (`bitplane::plain::frame`), a row-major (`bitplane::plain::row`), a threshold
-//! or a remapped framebuffer all drive the same code, with the same swap, and
-//! the layout only changes the *cost* — [`Hub75::runs_per_refresh`] and
-//! [`crate::engine::shortest_run_bytes`] report it.
+//! The only interrupt is the terminator's: zero in a trigger register starts
+//! nothing, and on the quiet data channel it releases the one deferred interrupt.
+//! The CPU therefore wakes **once per frame** — at the boundary, where the chain
+//! has stopped and the swap belongs — and the rate depends neither on the layout
+//! (32 runs a refresh plane-major, 1024 row-major for these panels) nor on where
+//! the linker put the framebuffer, because an entry carries its own address.
 //!
-//! Two registers change per run. `READ_ADDR` is written through a non-trigger
-//! alias, then `TRANS_COUNT` through `AL1_TRANS_COUNT_TRIG` — whose trigger
-//! register *is* `TRANS_COUNT`, so that store sets the count and starts the run
-//! in one go. The channel never chains (`CHAIN_TO` is set to its own index, or
-//! the reset value would hand every completion to channel 0), so the interrupt
-//! is what keeps the picture moving.
-//!
-//! `reps` usually means one run per repetition. Where the layout allows it —
-//! the region is a power of two *and* the pointer is aligned to it, which is
-//! checked per run — the driver asks the DMA's ring to repeat the segment
-//! instead, and one run covers all `reps`.
-//!
-//! # The cost
-//!
-//! The interrupt is **load-bearing**: it *is* the refresh. A blocked interrupt
-//! pauses the picture, because the PIO holds its last word and the panel keeps
-//! its latched row; it cannot corrupt the picture. The shortest run of a layout
-//! is the deadline the interrupt has to meet: 109 µs plane-major, 3.4 µs
-//! row-major on this panel. Steady state is [`Hub75::runs_per_refresh`] runs per
-//! refresh: 32 for a six-plane plane-major frame (~4.6 k/s), 1024 for row-major
-//! before the ring paths are counted.
+//! Between boundaries the CPU is free: the chain re-arms itself as often as the
+//! frame needs, and a `reps` count costs an entry in the table rather than a run
+//! of its own, so no ring size, alignment or power-of-two rule appears anywhere.
 //!
 //! # Double buffering
 //!
 //! [`Hub75::swap`] takes the incoming framebuffer and remembers the *delta*
-//! between it and the one on the panel: the segment offsets are layout constants
-//! (`bcm_segment_ptr` is a field access), so a swap is one number, applied by
-//! the interrupt at the next frame boundary. The incoming frame starts exactly
-//! then, the outgoing buffer is unreferenced at that instant, and
-//! [`Hub75Swap::wait`] hands it back.
+//! between it and the one on the panel. Both buffers have the same type and
+//! therefore the same layout, so a swap is one number, applied by the interrupt at
+//! the next frame boundary. The incoming frame starts exactly then, the outgoing
+//! buffer is unreferenced at that instant, and [`Hub75Swap::wait`] hands it back.
+//!
+//! A descriptor names an absolute address, so the interrupt applies the delta
+//! through [`crate::descriptor::patch`] — one store per run, on the frames that
+//! swap and no others — and then restarts the chain.
 //!
 //! # The interrupt
 //!
@@ -99,14 +91,11 @@ use hal::pio::PIOExt;
 use hal::pio::PinDir;
 use hal::pio::ShiftDirection;
 use hub75_framebuffer::FrameBuffer;
+use hub75_framebuffer::bcm_rep_count;
 
-use crate::engine::Cursor;
-use crate::engine::MAX_SEGMENTS;
-use crate::engine::MAX_TRANSFER_WORDS;
-use crate::engine::Plan;
-use crate::engine::Step;
-use crate::engine::WORD_BYTES;
-use crate::engine::shortest_run_bytes;
+use crate::descriptor::DESCRIPTOR_WORDS;
+use crate::descriptor::Descriptor;
+use crate::descriptor::MAX_DESCRIPTORS;
 use crate::pins;
 use crate::programs::PULL_THRESHOLD;
 use crate::programs::hub75_stream;
@@ -114,8 +103,19 @@ use crate::programs::hub75_stream;
 /// `log2` of the data channel's transfer size: 16-bit framebuffer words.
 const DATA_SIZE_HALFWORD: u8 = 1;
 
-/// `CTRL.RING_SIZE` field: bits 8-11.
-const RING_SIZE_MASK: u32 = 0x0f << 8;
+/// `log2` of the control channel's transfer size: 32-bit descriptor words.
+const DATA_SIZE_WORD: u8 = 2;
+
+/// `RING_SIZE` for the control channel's write pointer: `1 << 3` bytes, the two
+/// words of one `AL3` descriptor block.
+///
+/// The ring wraps the write address on an 8-byte boundary, so every trigger
+/// writes the same two data-channel registers — the whole reason the control
+/// channel needs no per-run address of its own.
+const CONTROL_RING_SIZE_LOG2: u8 = 3;
+
+/// `TREQ_SEL` for a channel nothing paces: it transfers as fast as the bus takes.
+const TREQ_PERMANENT: u8 = 63;
 
 /// PIO cycles one word costs. The panel clock is therefore the word rate.
 const CYCLES_PER_WORD: u32 = crate::programs::CYCLES_PER_WORD;
@@ -151,11 +151,12 @@ pub const PIN_COUNT: usize = pins::WORD_PINS as usize;
 pub struct Hub75Config {
     /// DMA interrupt line the application bound [`on_dma_irq`] to.
     ///
-    /// Required, because the interrupt is what re-arms each run: without it the
-    /// panel never advances. The pairing is the application's — this value and
-    /// the `#[interrupt]` function calling [`on_dma_irq`] must name the *same*
-    /// line, and the driver cannot check that (nothing in the vector table is
-    /// readable that way), so a mismatch simply means a still picture.
+    /// Required, because the interrupt is what restarts the chain at each frame
+    /// boundary: without it the panel plays one frame and stops. The pairing is
+    /// the application's — this value and the `#[interrupt]` function calling
+    /// [`on_dma_irq`] must name the *same* line, and the driver cannot check that
+    /// (nothing in the vector table is readable that way), so a mismatch simply
+    /// means a still picture.
     pub interrupt: pac::Interrupt,
     /// Panel shift-clock frequency — one word, one column, per period.
     pub panel_clock: Rate<u32, 1, 1>,
@@ -197,7 +198,7 @@ impl Hub75Config {
 /// out of order, or a framebuffer whose layout this driver cannot cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hub75Error {
-    /// A driver already exists. There is one PIO, one channel and one engine,
+    /// A driver already exists. There is one PIO, two channels and one table,
     /// and the driver runs for ever, so a second instance would be a bug.
     AlreadyInitialised,
     /// A swap is still in flight. Wait for the previous one — which hands the
@@ -306,38 +307,24 @@ impl Hub75Pins {
 /// The engine's state.
 ///
 /// Everything here is deliberately *data*: the interrupt cannot name the
-/// framebuffer's type, so the sequence, the segment offsets and the channel's
-/// register addresses are all captured at init and walked afterwards.
+/// framebuffer's type, so the frame's table and the control channel's register
+/// addresses are captured at init and used afterwards.
 struct Engine {
-    /// The framebuffer's BCM sequence, copied from the crate.
-    plan: Plan,
-    /// Byte offsets of every segment, relative to the framebuffer's base.
-    ///
-    /// Offsets, not pointers, because both framebuffers of a double-buffered
-    /// driver have the same type and therefore the same layout —
-    /// `bcm_segment_ptr` is a field access — so a swap is one delta added to the
-    /// base. `engine.rs`'s tests check the property that makes it valid (every
-    /// segment lies inside the framebuffer) for both crate layouts.
-    offsets: [i32; MAX_SEGMENTS],
+    /// One frame's runs and its terminator, played by the control channel.
+    table: [Descriptor; MAX_DESCRIPTORS + 1],
+    /// Runs in `table`, i.e. the index of the terminator. Zero means no driver.
+    table_count: usize,
     /// The framebuffer being scanned.
     base: u32,
     /// A swap waiting for the next frame boundary: the delta to the incoming
     /// framebuffer.
     pending: Option<i32>,
-    /// Where the walk is.
-    cursor: Cursor,
-    /// Whether the run just issued asked the DMA's ring to repeat the segment,
-    /// so the next advance knows its `reps` are already satisfied.
-    ringed: bool,
-    /// The data channel's `READ_ADDR`, through the alias whose trigger is
-    /// `TRANS_COUNT`, so writing it starts nothing.
-    read_addr: *mut u32,
-    /// The alias whose trigger register is `TRANS_COUNT`: one store sets the
-    /// count and starts the run.
-    trans_count_trig: *mut u32,
-    /// That alias's `CTRL`, for `RING_SIZE` — a plain register, never a trigger.
-    ctrl: *mut u32,
-    /// This channel's bit in `INTR`/`INTEn`, and the line it is routed to.
+    /// The control channel's `READ_ADDR`, through the alias that does not
+    /// trigger: a frame boundary points it back at the table.
+    control_read_addr: *mut u32,
+    /// The control channel's `TRANS_COUNT` trigger: one store restarts the walk.
+    control_trigger: *mut u32,
+    /// The data channel's bit in `INTR`/`INTEn`, and the line it is routed to.
     flag: u32,
     irq_line: u8,
 }
@@ -348,70 +335,57 @@ struct Engine {
 unsafe impl Send for Engine {}
 
 impl Engine {
-    /// Nothing running. A driver fills this in place, so the 1.3 KB of offsets
-    /// never passes through the stack.
+    /// Nothing running. A driver fills this in place, so the 16 KiB table never
+    /// passes through the stack.
     const EMPTY: Self = Self {
-        plan: Plan::EMPTY,
-        offsets: [0; MAX_SEGMENTS],
+        table: [Descriptor::TERMINATOR; MAX_DESCRIPTORS + 1],
+        table_count: 0,
         base: 0,
         pending: None,
-        cursor: Cursor::new(),
-        ringed: false,
-        read_addr: core::ptr::null_mut(),
-        trans_count_trig: core::ptr::null_mut(),
-        ctrl: core::ptr::null_mut(),
+        control_read_addr: core::ptr::null_mut(),
+        control_trigger: core::ptr::null_mut(),
         flag: 0,
         irq_line: 0,
     };
 
-    /// Programs the current segment and starts it.
-    fn program(&mut self) {
-        let offset = self.offsets[self.cursor.index()];
-        let address = self.base.wrapping_add(offset as u32);
-        // The ring decision is made against the address the hardware will read,
-        // not the offset: a ring wraps the power-of-two boundary containing an
-        // address, and a framebuffer base is not necessarily aligned.
-        let run = self.cursor.run(&self.plan, address);
-        let ring_size = if run.ring_bytes == 0 {
-            0
-        } else {
-            run.ring_bytes.trailing_zeros()
+    /// Applies a pending swap: the framebuffer base, and the table the control
+    /// channel plays next.
+    ///
+    /// Returns whether a swap was applied. The base moves first, so a swap armed
+    /// while this runs is measured from the framebuffer that is about to be
+    /// scanned rather than the one leaving the panel.
+    fn apply_pending(&mut self) -> bool {
+        let Some(delta) = self.pending.take() else {
+            return false;
         };
-
-        // SAFETY: these are the data channel's own registers, captured at init
-        // and used only from here.
-        unsafe {
-            // `RING_SIZE` through the alias whose trigger is `TRANS_COUNT`:
-            // writing `CTRL` there reconfigures the channel without starting it.
-            let ctrl = self.ctrl.read_volatile();
-            self.ctrl
-                .write_volatile((ctrl & !RING_SIZE_MASK) | (ring_size << 8));
-            self.read_addr.write_volatile(address);
-            // The trigger: this store sets `TRANS_COUNT` and starts the run.
-            self.trans_count_trig.write_volatile(run.words);
-        }
-        self.ringed = run.ring_bytes != 0;
+        self.base = self.base.wrapping_add(delta as u32);
+        let count = self.table_count;
+        crate::descriptor::patch(&mut self.table, count, delta as u32);
+        SWAP_DONE.store(true, Ordering::Release);
+        true
     }
 
-    /// Runs one refresh will really cost, with the ring paths counted.
+    /// One frame: the control channel has stopped at the terminator, so apply a
+    /// swap and set the chain going again.
+    fn step_frame(&mut self) -> bool {
+        let swapped = self.apply_pending();
+        self.restart_chain();
+        swapped
+    }
+
+    /// Points the control channel at the table and starts it.
     ///
-    /// A copy of the cursor walks the plan once against the addresses the
-    /// hardware will see, so this is the number of interrupts a refresh takes —
-    /// not the un-ringed upper bound. For a frame-major buffer whose base is not
-    /// aligned to its segments' lengths, the two are the same; align the
-    /// framebuffer and the last, most-repeated segments collapse into single
-    /// runs.
-    fn runs(&self) -> u32 {
-        let mut cursor = Cursor::new();
-        let mut runs = 0;
-        loop {
-            let offset = self.offsets[cursor.index()];
-            let address = self.base.wrapping_add(offset as u32);
-            let run = cursor.run(&self.plan, address);
-            runs += 1;
-            if cursor.advance(&self.plan, run.ring_bytes != 0) == Step::FrameBoundary {
-                return runs;
-            }
+    /// The channel is halted at the terminator, so this is the store that begins
+    /// the frame: the read address resumes at the table's first run.
+    fn restart_chain(&mut self) {
+        let table = self.table.as_ptr() as u32;
+        let read_addr = self.control_read_addr;
+        let trigger = self.control_trigger;
+        // SAFETY: these are the control channel's own registers, captured at init
+        // and written only from here.
+        unsafe {
+            read_addr.write_volatile(table);
+            trigger.write_volatile(DESCRIPTOR_WORDS);
         }
     }
 }
@@ -470,12 +444,12 @@ impl IrqWaker {
 /// The swap state's waker.
 static WAKER: IrqWaker = IrqWaker::new();
 
-/// The DMA completion handler: advance the walk, apply a swap at the frame
-/// boundary, and start the next run.
+/// The DMA completion handler: apply a swap, and set the next frame going.
 ///
-/// This *is* the refresh — it is called once per run, and nothing else re-arms
-/// the channel — so it is deliberately short: an acknowledge, a cursor step, and
-/// three register stores.
+/// The only interrupt the engine raises is the table's terminator, so this runs
+/// once a frame — by which time the control channel has stopped — and does four
+/// things: acknowledge the data channel, patch the table if a swap is pending,
+/// restart the chain, and wake a waiting swap.
 ///
 /// Call it from the handler bound to the line named in [`Hub75Config::new`]:
 ///
@@ -490,7 +464,7 @@ pub fn on_dma_irq() {
     let swapped = critical_section::with(|cs| {
         let mut engine = ENGINE.borrow_ref_mut(cs);
         let engine = &mut *engine;
-        if engine.plan.count() == 0 {
+        if engine.table_count == 0 {
             // No driver, or an interrupt from a neighbour on the same line.
             return false;
         }
@@ -500,23 +474,7 @@ pub fn on_dma_irq() {
         // SAFETY: the DMA block is a static peripheral.
         unsafe { (*pac::DMA::ptr()).intr().write(|w| w.bits(engine.flag)) };
 
-        let ringed = engine.ringed;
-        let boundary = engine.cursor.advance(&engine.plan, ringed) == Step::FrameBoundary;
-
-        let mut swapped = false;
-        if boundary {
-            if let Some(delta) = engine.pending.take() {
-                // The frame boundary is the one instant where the incoming
-                // framebuffer can take over without tearing: the outgoing frame
-                // is done, and the new one starts with the next run.
-                engine.base = engine.base.wrapping_add(delta as u32);
-                SWAP_DONE.store(true, Ordering::Release);
-                swapped = true;
-            }
-        }
-
-        engine.program();
-        swapped
+        engine.step_frame()
     });
 
     if swapped {
@@ -529,11 +487,21 @@ pub fn on_dma_irq() {
 // The driver
 // ---------------------------------------------------------------------------
 
-/// Configures the one channel that streams the panel.
+/// Configures the data channel: the one that streams the panel.
 ///
-/// Written once, and never again: the interrupt changes only `READ_ADDR`,
-/// `TRANS_COUNT` and `RING_SIZE`, through the aliases that do not trigger.
-fn new_channel<CH: SingleChannel>(channel: &CH, fifo: u32, dreq: u8) {
+/// Written once, and never touched again — every descriptor the control channel
+/// plays rewrites `READ_ADDR` and `TRANS_COUNT`, and nothing rewrites `CTRL`.
+/// `control` is the channel that this one chains to when a run completes, and
+/// `IRQ_QUIET` is set so the end of a run does **not** interrupt: the only
+/// interrupt a frame raises is the table's terminator. (A channel that chains to
+/// itself does not chain; the reset value 0 would hand every completion to
+/// channel 0 instead.)
+fn new_data_channel<CH: SingleChannel, CCH: SingleChannel>(
+    channel: &CH,
+    control: &CCH,
+    fifo: u32,
+    dreq: u8,
+) {
     // SAFETY: the channel belongs to this driver from here on, and these writes
     // are the only configuration it ever gets.
     unsafe {
@@ -541,8 +509,7 @@ fn new_channel<CH: SingleChannel>(channel: &CH, fifo: u32, dreq: u8) {
         ch.ch_write_addr().write(|w| w.bits(fifo));
         // `CTRL` through the alias whose trigger is `TRANS_COUNT`, so this
         // configures without starting anything: 16-bit words, walk the read
-        // address, no ring by default, paced by the state machine, and one
-        // interrupt per run (the run *is* the tick).
+        // address, no ring, paced by the state machine.
         ch.ch_al1_ctrl().write(|w| {
             w.data_size().bits(DATA_SIZE_HALFWORD);
             w.incr_read().set_bit();
@@ -550,10 +517,43 @@ fn new_channel<CH: SingleChannel>(channel: &CH, fifo: u32, dreq: u8) {
             w.ring_sel().clear_bit();
             w.ring_size().bits(0);
             w.treq_sel().bits(dreq);
-            // A channel that chains to itself does not chain. The reset value is
-            // 0, which would hand every completion to channel 0 instead.
+            w.chain_to().bits(control.id());
+            w.irq_quiet().set_bit();
+            w.en().set_bit();
+            w
+        });
+    }
+}
+
+/// Configures the control channel: the one that plays a descriptor table into
+/// the data channel's `AL3` register block.
+///
+/// `target` is the data channel's `AL3_TRANS_COUNT`. The channel walks 32-bit
+/// words from the table, and wraps its write pointer on an 8-byte boundary so
+/// that every block lands on the same two registers. Nothing paces it: it runs
+/// as fast as the bus allows, once per run the data channel completes.
+fn new_control_channel<CH: SingleChannel>(channel: &CH, target: u32) {
+    // SAFETY: the channel belongs to this driver from here on, and these writes
+    // are the only configuration it ever gets.
+    unsafe {
+        let ch = channel.ch();
+        ch.ch_write_addr().write(|w| w.bits(target));
+        // `CTRL` through the alias whose trigger is `TRANS_COUNT`, so this
+        // configures without starting anything: 32-bit words, both addresses
+        // walking, the write address ringed over one descriptor block, no TREQ,
+        // and no chain — the trigger word inside the block is what starts the
+        // data channel, so a chain of its own would start it a second time.
+        ch.ch_al1_ctrl().write(|w| {
+            w.data_size().bits(DATA_SIZE_WORD);
+            w.incr_read().set_bit();
+            w.incr_write().set_bit();
+            w.ring_sel().set_bit();
+            w.ring_size().bits(CONTROL_RING_SIZE_LOG2);
+            w.treq_sel().bits(TREQ_PERMANENT);
+            w.high_priority().set_bit();
+            // A channel that chains to itself does not chain.
             w.chain_to().bits(channel.id());
-            w.irq_quiet().clear_bit();
+            w.irq_quiet().set_bit();
             w.en().set_bit();
             w
         });
@@ -577,9 +577,112 @@ fn arm(flag: u32, line: u8) {
     unsafe { register.write_volatile(register.read_volatile() | flag) };
 }
 
-/// A HUB75 panel, driven by hardware and an interrupt.
+/// What the constructors need back from the shared peripheral bring-up.
+struct BringUp {
+    /// The panel pins, converted and held so nothing else can claim the bus.
+    pins: Hub75Pins,
+    /// The PIO clock divider in use.
+    divider: u16,
+    /// The panel clock actually achieved: the request rounded to a divider.
+    panel_clock: Rate<u32, 1, 1>,
+    /// The state machine's FIFO, which is the data channel's write address.
+    fifo: u32,
+    /// The state machine's TX DREQ, which paces the data channel.
+    dreq: u8,
+}
+
+/// Starts the state machine and returns what the channels need to feed it.
 ///
-/// Created once — there is one PIO, one channel and one engine — and then
+/// The panel clock is a ceiling: the PIO divider is an integer and is rounded
+/// up, so a request no divider hits exactly runs the panel at the next slower
+/// clock rather than faster than the panel is rated for.
+fn bring_up(
+    pio: pac::PIO0,
+    resets: &mut pac::RESETS,
+    pins: Hub75Pins,
+    system_clock: Rate<u32, 1, 1>,
+    config: Hub75Config,
+) -> BringUp {
+    // A word every `CYCLES_PER_WORD` PIO cycles, so the divider is the ratio
+    // between the system clock and that many times the panel clock, rounded up
+    // so the panel never runs faster than the clock it was given.
+    let divider = divider_for(system_clock.to_Hz(), config.panel_clock.to_Hz());
+    assert!(
+        divider >= 1 && divider <= u16::MAX as u32,
+        "the panel clock is not representable: divider {divider} is outside \
+         the PIO's 1..=65535 range (system clock {} Hz, panel clock {} Hz)",
+        system_clock.to_Hz(),
+        config.panel_clock.to_Hz()
+    );
+    let divider = divider as u16;
+    let achieved =
+        Rate::<u32, 1, 1>::from_raw(system_clock.to_Hz() / divider as u32 / CYCLES_PER_WORD);
+
+    let (mut pio, sm0, _, _, _) = pio.split(resets);
+
+    // The board's wiring, as the driver understands it. The constructor's
+    // signature already pins each argument to a GPIO number; this checks the
+    // order it means, against `pins.rs`, before anything is driven.
+    assert_eq!(
+        pins.numbers(),
+        [
+            pins::R0,
+            pins::G0,
+            pins::B0,
+            pins::R1,
+            pins::G1,
+            pins::B1,
+            pins::ROW_A,
+            pins::ROW_B,
+            pins::ROW_C,
+            pins::ROW_D,
+            pins::ROW_E,
+            pins::CLK,
+            pins::STB,
+            pins::OE,
+        ],
+        "Hub75Pins must be handed over in HUB75 bus order"
+    );
+
+    // The clock's polarity is the pad's, so the pin is inverted before the
+    // machine starts and the first clock level is already the idle one.
+    #[cfg(feature = "invert-clock")]
+    let mut pins = pins;
+    #[cfg(feature = "invert-clock")]
+    pins.invert_clock();
+
+    let program = pio
+        .install(&hub75_stream())
+        .expect("the stream program fits the instruction memory");
+    let (mut sm, _, tx) = PIOBuilder::from_installed_program(program)
+        .out_pins(pins::WORD_BASE, pins::WORD_PINS)
+        .side_set_pin_base(pins::CLK)
+        .clock_divisor_fixed_point(divider, 0)
+        .out_shift_direction(ShiftDirection::Right)
+        .autopull(true)
+        .pull_threshold(PULL_THRESHOLD)
+        .buffers(Buffers::OnlyTx)
+        .build(sm0);
+
+    // Every pin of the word is an output: the machine drives the whole bus,
+    // clock included.
+    sm.set_pindirs((0..pins::WORD_PINS).map(|offset| (pins::WORD_BASE + offset, PinDir::Output)));
+    // Keep the machine running. The handle has no `Drop`, so dropping it here
+    // would be safe; holding it documents who owns the machine.
+    let _sm = sm.start();
+
+    BringUp {
+        pins,
+        divider,
+        panel_clock: achieved,
+        fifo: tx.fifo_address() as u32,
+        dreq: tx.dreq_value(),
+    }
+}
+
+/// A HUB75 panel, driven by hardware and one interrupt a frame.
+///
+/// Created once — there is one PIO, two DMA channels and one table — and then
 /// refreshes itself: the CPU only writes pixels and arms the occasional swap.
 pub struct Hub75<FB: FrameBuffer + 'static> {
     /// PIO clock divider actually used, for reporting.
@@ -598,11 +701,12 @@ pub struct Hub75<FB: FrameBuffer + 'static> {
 impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
     /// Starts the panel.
     ///
-    /// Takes the PIO block, **one** DMA channel, the pins, the system clock the
-    /// PIO divider is derived from, the configuration (which names the interrupt
-    /// line the application bound [`on_dma_irq`] to), and the first framebuffer
-    /// to display. From here the panel refreshes itself; nothing else needs
-    /// calling, ever.
+    /// Takes the PIO block, **two** DMA channels — `channel` streams the panel,
+    /// `control` plays the descriptor table — the pins, the system clock the PIO
+    /// divider is derived from, the configuration (which names the interrupt line
+    /// the application bound [`on_dma_irq`] to), and the first framebuffer to
+    /// display. From here the panel refreshes itself; nothing else needs calling,
+    /// ever.
     ///
     /// `fb` is taken by exclusive reference, and the first [`swap`](Self::swap)
     /// is what hands it back — so the buffer on screen and the buffer being
@@ -610,14 +714,15 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
     ///
     /// # Panics
     ///
-    /// Panics if the framebuffer needs more segments than the engine can cache
-    /// (`engine::MAX_SEGMENTS`), or if its sequence has no segments. Both are
-    /// properties of the layout, and both are better discovered at startup than
-    /// as a frozen panel.
+    /// Panics if the frame needs more runs than [`MAX_DESCRIPTORS`], if a
+    /// framebuffer segment is empty (a zero-word run would end the frame early),
+    /// or if the framebuffer's BCM sequence is empty. All are properties of the
+    /// layout, and all are better discovered at startup than as a frozen panel.
     #[allow(clippy::too_many_arguments)]
-    pub fn new<CH>(
+    pub fn new<CH, CCH>(
         pio: pac::PIO0,
         channel: CH,
+        control: CCH,
         resets: &mut pac::RESETS,
         pins: Hub75Pins,
         system_clock: Rate<u32, 1, 1>,
@@ -626,6 +731,7 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
     ) -> Result<Self, Hub75Error>
     where
         CH: SingleChannel,
+        CCH: SingleChannel,
     {
         if DRIVER_TAKEN.swap(true, Ordering::AcqRel) {
             return Err(Hub75Error::AlreadyInitialised);
@@ -635,82 +741,27 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
             None => return Err(Hub75Error::NotADmaIrq),
         };
 
-        // A word every `CYCLES_PER_WORD` PIO cycles, so the divider is the ratio
-        // between the system clock and that many times the panel clock, rounded up
-        // so the panel never runs faster than the clock it was given.
-        let divider = divider_for(system_clock.to_Hz(), config.panel_clock.to_Hz());
-        assert!(
-            divider >= 1 && divider <= u16::MAX as u32,
-            "the panel clock is not representable: divider {divider} is outside \
-             the PIO's 1..=65535 range (system clock {} Hz, panel clock {} Hz)",
-            system_clock.to_Hz(),
-            config.panel_clock.to_Hz()
-        );
-        let divider = divider as u16;
-        let achieved =
-            Rate::<u32, 1, 1>::from_raw(system_clock.to_Hz() / divider as u32 / CYCLES_PER_WORD);
-
-        let (mut pio, sm0, _, _, _) = pio.split(resets);
-
-        // The board's wiring, as the driver understands it. The constructor's
-        // signature already pins each argument to a GPIO number; this checks the
-        // order it means, against `pins.rs`, before anything is driven.
-        assert_eq!(
-            pins.numbers(),
-            [
-                pins::R0,
-                pins::G0,
-                pins::B0,
-                pins::R1,
-                pins::G1,
-                pins::B1,
-                pins::ROW_A,
-                pins::ROW_B,
-                pins::ROW_C,
-                pins::ROW_D,
-                pins::ROW_E,
-                pins::CLK,
-                pins::STB,
-                pins::OE,
-            ],
-            "Hub75Pins must be handed over in HUB75 bus order"
-        );
-
-        // The clock's polarity is the pad's, so the pin is inverted before the
-        // machine starts and the first clock level is already the idle one.
-        #[cfg(feature = "invert-clock")]
-        let mut pins = pins;
-        #[cfg(feature = "invert-clock")]
-        pins.invert_clock();
-
-        let program = pio
-            .install(&hub75_stream())
-            .expect("the stream program fits the instruction memory");
-        let (mut sm, _, tx) = PIOBuilder::from_installed_program(program)
-            .out_pins(pins::WORD_BASE, pins::WORD_PINS)
-            .side_set_pin_base(pins::CLK)
-            .clock_divisor_fixed_point(divider, 0)
-            .out_shift_direction(ShiftDirection::Right)
-            .autopull(true)
-            .pull_threshold(PULL_THRESHOLD)
-            .buffers(Buffers::OnlyTx)
-            .build(sm0);
-
-        // Every pin of the word is an output: the machine drives the whole bus,
-        // clock included.
-        sm.set_pindirs(
-            (0..pins::WORD_PINS).map(|offset| (pins::WORD_BASE + offset, PinDir::Output)),
-        );
-        // Keep the machine running. The handle has no `Drop`, so dropping it
-        // here would be safe; holding it documents who owns the machine.
-        let _sm = sm.start();
-
-        new_channel(&channel, tx.fifo_address() as u32, tx.dreq_value());
-        Ok(Self::start(
-            &channel,
+        let BringUp {
             pins,
             divider,
-            achieved,
+            panel_clock,
+            fifo,
+            dreq,
+        } = bring_up(pio, resets, pins, system_clock, config);
+
+        // The control channel writes the data channel's `AL3` block: its last
+        // word is that block's trigger, so a descriptor is the two words before
+        // it and the ring keeps both stores landing there.
+        let target = channel.ch().ch_al3_trans_count().as_ptr() as u32;
+        new_control_channel(&control, target);
+        new_data_channel(&channel, &control, fifo, dreq);
+
+        Ok(Self::start(
+            &channel,
+            &control,
+            pins,
+            divider,
+            panel_clock,
             config.interrupt,
             irq_line,
             fb,
@@ -719,14 +770,17 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
 }
 
 impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
-    /// Builds the engine on `fb` and starts the walk.
+    /// Materialises the frame in the table and starts it.
     ///
     /// Split out of [`new`](Self::new) so that one function does the peripheral
-    /// setup and this one does the engine — and so that the 1.3 KB offset table
-    /// is filled in place in the static rather than passed around.
+    /// setup and this one the engine — and so that the 16 KiB table is filled in
+    /// place in the static rather than passed around. Init is the only writer of
+    /// the table until the interrupt is unmasked, and the interrupt is the only
+    /// writer afterwards.
     #[allow(clippy::too_many_arguments)]
     fn start(
         channel: &impl SingleChannel,
+        control: &impl SingleChannel,
         pins: Hub75Pins,
         divider: u16,
         panel_clock: Rate<u32, 1, 1>,
@@ -734,66 +788,57 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
         irq_line: u8,
         fb: &'static mut FB,
     ) -> Self {
-        // The framebuffer's own description of one refresh.
-        let plan = Plan::of::<FB>();
-        assert!(plan.count() > 0, "the framebuffer's BCM sequence is empty");
+        let expected = bcm_rep_count::<FB>();
         assert!(
-            plan.count() <= MAX_SEGMENTS,
-            "{} segments exceeds engine::MAX_SEGMENTS ({MAX_SEGMENTS}); raise it \
-             for this layout",
-            plan.count()
-        );
-        let frame_words = (plan.bytes_per_refresh() / WORD_BYTES) as u32;
-        assert!(
-            frame_words <= MAX_TRANSFER_WORDS,
-            "a refresh of {frame_words} words does not fit a transfer count"
-        );
-        assert!(
-            shortest_run_bytes::<FB>() >= WORD_BYTES,
-            "the framebuffer has a zero-length segment, which would stall the engine"
+            expected <= MAX_DESCRIPTORS,
+            "{expected} run descriptors exceed descriptor::MAX_DESCRIPTORS \
+             ({MAX_DESCRIPTORS}); raise that constant for this layout"
         );
         let base = fb as *const FB as u32;
         let channel_id = channel.id();
 
-        // SAFETY: the channel's registers live for the rest of the program, and
-        // the engine's interrupt reads them from here on. `as_ptr` is safe; the
-        // pointers it returns are only dereferenced in the interrupt.
-        let (read_addr, trans_count_trig, ctrl) = {
-            let ch = channel.ch();
+        // SAFETY: the control channel's registers live for the rest of the
+        // program, and the interrupt writes them from here on. `as_ptr` is safe;
+        // the pointers it returns are only dereferenced in the interrupt.
+        let (control_read_addr, control_trigger) = {
+            let ch = control.ch();
             (
                 ch.ch_al1_read_addr().as_ptr(),
                 ch.ch_al1_trans_count_trig().as_ptr(),
-                ch.ch_al1_ctrl().as_ptr(),
             )
         };
 
-        let runs = critical_section::with(|cs| {
+        let (runs, frame_words) = critical_section::with(|cs| {
             let mut engine = ENGINE.borrow_ref_mut(cs);
             let engine = &mut *engine;
-            engine.plan = plan;
             engine.base = base;
             engine.pending = None;
-            engine.cursor = Cursor::new();
-            engine.ringed = false;
-            engine.read_addr = read_addr;
-            engine.trans_count_trig = trans_count_trig;
-            engine.ctrl = ctrl;
             engine.flag = 1 << channel_id;
             engine.irq_line = irq_line;
-            for index in 0..plan.count() {
-                engine.offsets[index] = fb.bcm_segment_ptr(index) as u32 as i32 - base as i32;
-            }
-            // The real cost of this layout, ring paths included.
-            engine.runs()
+            engine.control_read_addr = control_read_addr;
+            engine.control_trigger = control_trigger;
+            let count = crate::descriptor::fill(fb, &mut engine.table);
+            engine.table_count = count;
+            // The table *is* the frame, so the words a refresh streams are its
+            // own counts: no second walk of the sequence.
+            let words = engine.table[..count]
+                .iter()
+                .map(|descriptor| descriptor.trans_count)
+                .sum();
+            (count as u32, words)
         });
+        debug_assert_eq!(runs, expected as u32, "the table is one run per repetition");
+        assert!(frame_words > 0, "a refresh of no words has no refresh rate");
+
         SWAP_DONE.store(false, Ordering::Release);
 
-        // Arm the interrupt, then start the walk. The order matters: the
-        // completion of the first run is what programs the second.
+        // Arm the interrupt, then start the chain. The order matters: the first
+        // interrupt is a frame boundary, and the control channel's first
+        // descriptor is what puts words on the panel.
         arm(1 << channel_id, irq_line);
         // SAFETY: the application bound `on_dma_irq` to this line.
         unsafe { hal::arch::interrupt_unmask(interrupt) };
-        critical_section::with(|cs| ENGINE.borrow_ref_mut(cs).program());
+        critical_section::with(|cs| ENGINE.borrow_ref_mut(cs).restart_chain());
 
         Self {
             divider,
@@ -824,13 +869,17 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
         self.panel_clock.to_Hz() / self.frame_words
     }
 
-    /// Runs the interrupt services per refresh — the honest cost of the layout.
+    /// Runs one refresh is made of: the length of the descriptor table.
     ///
-    /// Counted through the engine's own cursor, so segments the DMA's ring can
-    /// repeat on its own are already folded in: 32 for a six-plane plane-major
-    /// frame on an unaligned buffer, 10 when the buffer is aligned to its
-    /// segments, `NROWS` times as many for row-major. Multiply by
-    /// [`refresh_hz`] for the interrupt rate.
+    /// One entry per repetition of every segment, so this is the layout's cost
+    /// and not the panel's — 32 for a six-plane plane-major frame at any
+    /// geometry, `NROWS` times as many for row-major. Nor is it the *buffer's*:
+    /// an entry names its own address, so nothing about this number changes when
+    /// a swap puts the other framebuffer on the panel.
+    ///
+    /// It is also, one for one, the runs a refresh is played in. The interrupts
+    /// a second are [`refresh_hz`], because the table's terminator is the only
+    /// thing that interrupts.
     ///
     /// [`refresh_hz`]: Self::refresh_hz
     pub fn runs_per_refresh(&self) -> u32 {
@@ -873,7 +922,7 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
         let armed = critical_section::with(|cs| {
             let mut engine = ENGINE.borrow_ref_mut(cs);
             let engine = &mut *engine;
-            if engine.plan.count() == 0 || engine.pending.is_some() {
+            if engine.table_count == 0 || engine.pending.is_some() {
                 return Err(());
             }
             let outgoing = engine.base;

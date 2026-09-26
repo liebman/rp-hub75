@@ -70,21 +70,13 @@ const NROWS: usize = ROW_PAIRS;
 const WORDS_PER_ROW: usize = PANEL_WIDTH;
 const PLANES: usize = BIT_DEPTH as usize;
 
-type Fb = DmaFrameBuffer<NROWS, WORDS_PER_ROW, PLANES>;
-
-/// Aligned so the DMA's ring can repeat segments (see `gradient`).
-#[repr(align(4096))]
-struct Aligned(Fb);
-
-/// The DMA ring repeats a segment only while the framebuffer's *address* stays
-/// aligned, so the cell has to keep the wrapper's alignment: it does, because
-/// alignment is the maximum over a struct's fields and `static_cell`'s
-/// `AtomicBool` cannot lower 4096 — which in turn puts the framebuffer behind it
-/// on a 4096-byte boundary of its own.
+/// The framebuffer type this example uses: `hub75-framebuffer`'s plane-major
+/// layout, whose words are the panel's own pin levels.
 ///
-/// Asserted at compile time: without it the panel still refreshes, but for 32
-/// runs a refresh instead of 10.
-const _: () = assert!(core::mem::align_of::<static_cell::StaticCell<Aligned>>() == 4096);
+/// The two of them are plain statics, and that costs nothing: the engine names
+/// each run's address in the descriptor table, so neither a framebuffer's address
+/// nor its alignment changes the picture or the interrupt load.
+type Fb = DmaFrameBuffer<NROWS, WORDS_PER_ROW, PLANES>;
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
 ///
@@ -161,14 +153,13 @@ fn main() -> ! {
 
     // One framebuffer is the panel's at any moment and the other is this loop's;
     // a swap exchanges them.
-    let aligned0 = mk_static!(Aligned, Aligned(Fb::new()));
-    let aligned1 = mk_static!(Aligned, Aligned(Fb::new()));
-    let fb0: &'static mut Fb = &mut aligned0.0;
-    let fb1: &'static mut Fb = &mut aligned1.0;
+    let fb0: &'static mut Fb = mk_static!(Fb, Fb::new());
+    let fb1: &'static mut Fb = mk_static!(Fb, Fb::new());
 
     let hub75 = Hub75::new(
         pac.PIO0,
         dma.ch0,
+        dma.ch1,
         &mut pac.RESETS,
         Hub75Pins::new(
             pins.gpio0,
