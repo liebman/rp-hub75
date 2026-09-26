@@ -119,7 +119,9 @@ See [plan.md](plan.md) for what is done and what is next, and [NOTES.md](NOTES.m
 for the measurements and the datasheet facts the design rests on — including what
 is still unverified: the panel clock ceiling, and the strobe edge and address order
 as *measurements* rather than as a picture that looks right. `ladder`'s rungs are
-the instrument for the last two, and it has not been read off the panel yet.
+the instrument for the last two: they cycle and announce themselves over RTT
+(verified on the bench), and the pass itself — an eye on the five patterns — has not
+been made yet.
 
 ## Layout
 
