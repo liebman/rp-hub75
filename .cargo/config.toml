@@ -30,5 +30,10 @@ runner = "probe-rs run --chip RP235x"
 build-arm = "build --release"
 run-arm = "run --release"
 
+run-gradient = "run --release --example gradient"
+run-ghost = "run --release --example ghost"
+run-ladder = "run --release --example ladder"
+run-telemetry = "run --release --example telemetry"
+
 [env]
 DEFMT_LOG = "info"
