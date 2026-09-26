@@ -75,15 +75,13 @@
 /// test --lib` links a host harness without `defmt.x`, where a `defmt::info!`
 /// expansion is an undefined `_defmt_acquire`. So the library logs on the panel
 /// and stays silent in a host test, whatever the feature says.
+///
+/// This is a re-export rather than a wrapper, so the file and line defmt reports
+/// are the *caller's*. A wrapper would attribute every line to the macro.
 #[cfg(all(feature = "defmt", target_os = "none"))]
-#[macro_export]
-macro_rules! log_info {
-    ($($arg:tt)*) => {
-        defmt::info!($($arg)*)
-    };
-}
+pub use defmt::info as log_info;
 
-/// The silent half of [`log_info!`], for a host build or `--no-default-features`.
+/// The silent half of [`log_info!`]: a host build, or `--no-default-features`.
 ///
 /// The arguments are still evaluated and discarded, so a caller's counters are
 /// read — and therefore not "unused" — whether the feature is on or off. A tuple

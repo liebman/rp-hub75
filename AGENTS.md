@@ -86,7 +86,7 @@ unverified until it is flashed; say so rather than implying otherwise.
 ### Logging
 
 `defmt` over RTT, through the debug probe: `cargo run-arm --example <name>` prints
-it. Three rules come with that.
+it. Four rules come with that.
 
 * **The interrupt never logs.** `defmt`'s `acquire` is a critical section, and
   `on_dma_irq` runs once a frame with the picture waiting on it. The driver logs
@@ -99,6 +99,10 @@ it. Three rules come with that.
   sites are gated on the target as well as the feature, because the host test
   harness links without `defmt.x`. `--no-default-features` builds a silent driver;
   both passes are in the scripts.
+* **`log_info!` is a `pub use` of `defmt::info`, not a wrapper.** A `macro_rules!`
+  that forwards to `defmt::info!` resolves `file!()` and `line!()` inside the macro,
+  so every line in the log reports `lib.rs` and the definition's line. Re-exporting
+  keeps the caller's location, which is most of the value of a boot log.
 
 ## Conventions
 
