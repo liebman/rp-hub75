@@ -49,7 +49,7 @@ startup, is open work — see `plan.md`.
 | `src/programs.rs` | the PIO program, the word↔pin layout, the panel model tests |
 | `src/color.rs` | `level`, `grey`, `gamma_step` for a `BIT_DEPTH`-bit panel |
 | `src/pins.rs` | the reference wiring: the Interstate 75 W pin map (GP0–GP13) |
-| `examples/` | `gradient`, `telemetry`, `ghost` — every example goes through `Hub75` |
+| `examples/` | `gradient`, `telemetry`, `ghost`, `ladder` — every example goes through `Hub75` |
 | `NOTES.md` | measurements, datasheet facts, and the reasoning: the design record |
 | `plan.md` | milestones: what is done, in progress, and next |
 | `README.md` | orientation for a human reader |
@@ -69,11 +69,11 @@ lines: each one is shaped around the bare-metal target.
 
 | command | what, and why |
 |---|---|
-| `./test-all.sh` | Host unit tests. The default target is `thumbv8m.main-none-eabihf`, where tests cannot *run*, so the script asks for the host triple explicitly. |
-| `./build-all.sh` | `cargo build-arm` (= `build --release`) for the library and every example. |
-| `./clippy-all.sh` | `cargo clippy --release --lib --examples`. Not `--all-targets`: the test harness needs `core::test`, which does not exist for this target. |
+| `./test-all.sh` | Host unit tests. The default target is `thumbv8m.main-none-eabihf`, where tests cannot *run*, so the script asks for the host triple explicitly. Runs the four polarity combinations plus one `--no-default-features` pass. |
+| `./build-all.sh` | `cargo build-arm` (= `build --release`) for the library and every example, in the four polarity combinations, plus the `--no-default-features` (silent) library and examples. |
+| `./clippy-all.sh` | `cargo clippy --release --lib --examples`. Not `--all-targets`: the test harness needs `core::test`, which does not exist for this target. Same feature passes as `build-all.sh`. |
 | `./fmt-all.sh` | `cargo fmt --all`, then `--check`. Do not add a `rustfmt.toml` without agreeing on it. |
-| `cargo run-arm --example gradient` | Builds and flashes over `picotool` (no probe needed). Put the board in BOOTSEL: hold BOOT, tap RESET. |
+| `cargo run-arm --example gradient` | Builds, flashes and runs over the debug probe (`probe-rs run --chip RP235x`), and streams the `defmt` log back on the same terminal. Without a probe, flash over the USB-C bootloader instead: hold BOOT, tap RESET, `picotool load -u -v -x -t elf <elf>`. |
 | `cargo doc --no-deps` | Checks that the documentation builds. A `rustdoc` warning is a bug — nothing denies them here, and there is no `cargo xtask` in this crate. |
 
 There is no CI and no `.github/`. Whatever a change claims is verified, you ran.
@@ -82,6 +82,23 @@ Hardware is the only judge of the panel. Host tests cover the target-independent
 parts — the PIO bit accounting, the engine's weights and run counts, the colour
 math. A change to the panel path in `src/programs.rs` or `src/driver.rs` is
 unverified until it is flashed; say so rather than implying otherwise.
+
+### Logging
+
+`defmt` over RTT, through the debug probe: `cargo run-arm --example <name>` prints
+it. Three rules come with that.
+
+* **The interrupt never logs.** `defmt`'s `acquire` is a critical section, and
+  `on_dma_irq` runs once a frame with the picture waiting on it. The driver logs
+  its startup and nothing else; examples log from their own loops.
+* **`defmt-rtt` must keep `disable-blocking-mode`.** probe-rs puts RTT into
+  blocking mode, so a host that stops reading would block a log call — and a
+  blocked display loop is the frozen panel this project has already met twice.
+  Dropping a frame is the right failure.
+* **The library's logging is the `defmt` feature, on by default**, and its call
+  sites are gated on the target as well as the feature, because the host test
+  harness links without `defmt.x`. `--no-default-features` builds a silent driver;
+  both passes are in the scripts.
 
 ## Conventions
 

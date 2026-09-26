@@ -13,6 +13,16 @@ version = "0.1.0"
 name = "rp_hub75"
 
 [features]
+# --- Logging -----------------------------------------------------------------
+#
+# The driver logs its init — the divider and panel clock, then the table's size
+# and rate — through defmt, over RTT on the debug probe. On by default, because
+# the bench has a probe; `--no-default-features` builds a silent driver. The call
+# sites are gated on the target as well as the feature: the host test harness
+# links without `defmt.x`, so a call there would be an undefined `_defmt_acquire`.
+default = ["defmt"]
+defmt = ["dep:defmt"]
+
 # --- Library features --------------------------------------------------------
 #
 # These change what the driver compiles and how it drives the panel. The ones
@@ -70,6 +80,11 @@ reverse-row-order = ["hub75-framebuffer/reverse-row-order"]
 # `critical_section::Mutex`. `rp235x-hal`'s `critical-section-impl` means
 # `critical_section` is real.
 critical-section = "1.2"
+# Init-time logging over RTT, behind the `defmt` feature. The hal and the
+# framebuffer crate cannot be asked for their own defmt support: `rp235x-hal`
+# wants `defmt <0.4` and `hub75-framebuffer` wants `1.0`, and two defmt majors
+# cannot share an image. So the driver logs only its own primitives.
+defmt = { version = "1", optional = true }
 embedded-graphics = "0.8.2"
 # `interstate75` reorders the plain bitplane words so bit n is pin n for the
 # whole HUB75 bus (GP0-13), which is what lets one `out pins, 14` put a word
@@ -85,12 +100,18 @@ rp235x-hal = { version = "0.4.0", features = [
 [dev-dependencies]
 cortex-m = "0.7"
 embedded-hal = "1.0"
-panic-halt = "0.2.0"
+# The examples log over RTT. `disable-blocking-mode` is not optional here:
+# probe-rs puts RTT into blocking mode, so a host that stops reading would block
+# a log call — and a log call that blocks the display loop is a frozen panel,
+# which this project has already been bitten by once (the old USB CDC writer).
+# Dropping a frame is the right failure.
+defmt-rtt = { version = "1.3", features = ["disable-blocking-mode"] }
+# A panic prints its message and location over RTT, then halts. (No default
+# features, so `print-defmt` has to be asked for.)
+panic-probe = { version = "1", features = ["print-defmt"] }
 # The examples reach their framebuffers through `StaticCell` (see `mk_static!`),
 # so a swap can hand a `'static mut` framebuffer back and forth without `unsafe`.
 static_cell = "2.1"
-usb-device = "0.3.2"
-usbd-serial = "0.2.2"
 
 [profile.dev]
 debug = true

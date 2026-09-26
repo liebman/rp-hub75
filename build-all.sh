@@ -26,6 +26,19 @@ echo "Building (examples): cargo build-arm --examples"
 echo "=========================================="
 cargo build-arm --examples
 
+# The library logs through defmt by default; `--no-default-features` is the
+# silent build, and it is a different set of code paths (the `log_info!` that
+# discards its arguments), so it is built too.
+echo "=========================================="
+echo "Building (library, no logging): cargo build-arm --no-default-features"
+echo "=========================================="
+cargo build-arm --no-default-features
+
+echo "=========================================="
+echo "Building (examples, no logging): cargo build-arm --examples --no-default-features"
+echo "=========================================="
+cargo build-arm --examples --no-default-features
+
 echo "=========================================="
 echo "All builds succeeded!"
 echo "=========================================="

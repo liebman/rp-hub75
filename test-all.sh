@@ -26,6 +26,14 @@ for features in "" "invert-clock" "invert-oe" "invert-clock,invert-oe"; do
     cargo test --lib --target "$HOST_TARGET" "${extra[@]}"
 done
 
+# The library logs through defmt on the target and compiles those calls out on the
+# host, so `default = ["defmt"]` costs the harness nothing. This pass proves the
+# silent build compiles too, with no defmt dependency in the graph at all.
+echo "=========================================="
+echo "Host tests, no logging: cargo test --lib --target $HOST_TARGET --no-default-features"
+echo "=========================================="
+cargo test --lib --target "$HOST_TARGET" --no-default-features
+
 echo "=========================================="
 echo "All tests succeeded!"
 echo "=========================================="

@@ -25,6 +25,7 @@
 #![no_std]
 #![no_main]
 
+use defmt_rtt as _;
 use embedded_graphics::Drawable;
 use embedded_graphics::geometry::Point;
 use embedded_graphics::mono_font::MonoTextStyle;
@@ -34,7 +35,7 @@ use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::pixelcolor::RgbColor;
 use embedded_graphics::text::Alignment;
 use embedded_graphics::text::Text;
-use panic_halt as _;
+use panic_probe as _;
 use rp235x_hal as hal;
 
 use hal::Sio;

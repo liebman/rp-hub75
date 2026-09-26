@@ -14,12 +14,21 @@ rustflags = [
     "-C", "link-arg=--nmagic",
     # link.x comes from cortex-m-rt, which pulls in our memory.x
     "-C", "link-arg=-Tlink.x",
+    # defmt.x places the .defmt sections and provides the logger symbols. defmt's
+    # own build script only adds the search path for this script; passing it is
+    # the application's job, and it has to come after link.x.
+    "-C", "link-arg=-Tdefmt.x",
     "-C", "target-cpu=cortex-m33",
 ]
-# picotool flashes over the USB-C bootloader, so no debug probe is needed:
-# hold BOOT, tap RESET, then `cargo run-arm --example gradient`
-runner = "picotool load -u -v -x -t elf"
+# The debug probe flashes, runs and carries defmt back over RTT in one step:
+# `cargo run-arm --example gradient`, with the CMSIS-DAP probe attached.
+runner = "probe-rs run --chip RP235x"
+# Without a probe, flash over the USB-C bootloader instead: hold BOOT, tap RESET,
+# then `picotool load -u -v -x -t elf <elf>`.
 
 [alias]
 build-arm = "build --release"
 run-arm = "run --release"
+
+[env]
+DEFMT_LOG = "info"

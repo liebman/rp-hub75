@@ -81,23 +81,30 @@ list.
 | example | what |
 |---|---|
 | `gradient` | the display from `esp-hub75`'s gradient demo: three colour ramps (red, green, blue, one light level per column) and a status block whose labels are left-justified while the values are right-justified — refresh rate, render time, the descriptor table's runs a frame (`runs_per_refresh()`, 32 here), and a counter ticking ten times a second, which is also the heartbeat |
-| `telemetry` | the same engine and panel pattern, with `wait_for_done().await` and fps/interrupt/swap counters over USB CDC (the digit on the panel is the loop’s frame count). `irqs` should track `frame` one for one: one interrupt a frame is the whole engine |
+| `telemetry` | the same engine and panel pattern, with `wait_for_done().await` and frames/interrupts/swaps once a second over `defmt` → RTT (the digit on the panel is the loop’s frame count). `irqs` should track the frame count one for one: one interrupt a frame is the whole engine |
 | `ghost` | a ghosting / bleed probe: four phases — a blinking dot, a raster, a diagonal and a sweeping bar — that make row bleed (adjacent, and across the frame boundary) and column bleed visible, and name their direction |
+| `ladder` | the read-back ladder: five patterns, two seconds each, whose *failure modes* name a fault rather than just looking wrong — one row pair lit means the stream stopped, columns at x = 1, 2, 3 mean the panel latches on `STB`'s rising edge, the diagonal shifted means the address lines are a row out. A regression tool; `gradient` and `ghost` are the same questions at the eye's resolution |
 
-Two earlier engines lived in examples too — M3's raw single-channel stream and
-M4a's six-channel ring — and so did the one-channel/descriptor pair that replaced
-them; the losers are gone from the tree and what they taught is in
-[NOTES.md](NOTES.md) and in git. Every example here drives the panel through
-[`Hub75`](src/driver.rs), which is the only API this crate offers.
+Three earlier engines lived in examples too — M3's raw single-channel stream, M4a's
+six-channel ring, and the one-channel/descriptor pair that replaced them — and so
+did M3's original ladder; the losers are gone from the tree, what they taught is in
+[NOTES.md](NOTES.md) and in git, and the ladder is back as `examples/ladder.rs`.
+Every example here drives the panel through [`Hub75`](src/driver.rs), which is the
+only API this crate offers.
 
-Flashing (board in BOOTSEL: hold BOOT, tap RESET):
+Flashing and running, with the CMSIS-DAP probe attached:
 
 ```console
-cargo run-arm --example gradient
+cargo run-arm --example gradient        # flash, run, and stream the defmt log
 ```
 
-There is no UART to log to — GP0/GP1 are panel data — so telemetry goes over USB
-CDC (or SWD/RTT).
+Without a probe, flash over the USB-C bootloader instead (hold BOOT, tap RESET,
+then `picotool load -u -v -x -t elf <elf>`).
+
+There is no UART to log to — GP0/GP1 are panel data — so the log is `defmt` over
+RTT, back up the probe's wire. The old path was USB CDC, which needed no probe but
+could stall the display loop on a host that stopped reading; RTT drops a frame
+instead, and that is the one thing a log must never do to a panel.
 
 ## Status
 
@@ -111,7 +118,8 @@ put the framebuffers. Neither that engine nor the ring is in the crate any more.
 See [plan.md](plan.md) for what is done and what is next, and [NOTES.md](NOTES.md)
 for the measurements and the datasheet facts the design rests on — including what
 is still unverified: the panel clock ceiling, and the strobe edge and address order
-as *measurements* rather than as a picture that looks right.
+as *measurements* rather than as a picture that looks right. `ladder`'s rungs are
+the instrument for the last two, and it has not been read off the panel yet.
 
 ## Layout
 

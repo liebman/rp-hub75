@@ -37,8 +37,9 @@
 #![no_std]
 #![no_main]
 
+use defmt_rtt as _;
 use embedded_graphics::geometry::Point;
-use panic_halt as _;
+use panic_probe as _;
 use rp235x_hal as hal;
 
 use hal::Sio;

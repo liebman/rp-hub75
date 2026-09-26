@@ -27,6 +27,18 @@ echo "Clippy (examples): cargo clippy --release --examples"
 echo "=========================================="
 cargo clippy --release --examples
 
+# The silent build is a different set of code paths (`log_info!` discarding its
+# arguments), so it is linted too.
+echo "=========================================="
+echo "Clippy (library, no logging): cargo clippy --release --lib --no-default-features"
+echo "=========================================="
+cargo clippy --release --lib --no-default-features
+
+echo "=========================================="
+echo "Clippy (examples, no logging): cargo clippy --release --examples --no-default-features"
+echo "=========================================="
+cargo clippy --release --examples --no-default-features
+
 echo "=========================================="
 echo "All clippy runs succeeded!"
 echo "=========================================="

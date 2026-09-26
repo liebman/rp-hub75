@@ -69,6 +69,34 @@
 
 #![no_std]
 
+/// Logs a line through defmt on the target, and compiles to nothing anywhere else.
+///
+/// The feature is on by default, but the *target* gate is not optional: `cargo
+/// test --lib` links a host harness without `defmt.x`, where a `defmt::info!`
+/// expansion is an undefined `_defmt_acquire`. So the library logs on the panel
+/// and stays silent in a host test, whatever the feature says.
+#[cfg(all(feature = "defmt", target_os = "none"))]
+#[macro_export]
+macro_rules! log_info {
+    ($($arg:tt)*) => {
+        defmt::info!($($arg)*)
+    };
+}
+
+/// The silent half of [`log_info!`], for a host build or `--no-default-features`.
+///
+/// The arguments are still evaluated and discarded, so a caller's counters are
+/// read — and therefore not "unused" — whether the feature is on or off. A tuple
+/// of them is the cheapest way to say that; named arguments (`key = value`) are
+/// deliberately not supported here, and the crate does not use them.
+#[cfg(not(all(feature = "defmt", target_os = "none")))]
+#[macro_export]
+macro_rules! log_info {
+    ($($arg:tt)*) => {{
+        let _ = ($($arg)*);
+    }};
+}
+
 pub mod color;
 pub mod descriptor;
 pub mod driver;

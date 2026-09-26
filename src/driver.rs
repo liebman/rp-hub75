@@ -474,6 +474,11 @@ pub fn on_dma_irq() {
         // SAFETY: the DMA block is a static peripheral.
         unsafe { (*pac::DMA::ptr()).intr().write(|w| w.bits(engine.flag)) };
 
+        // Nothing here may log. defmt's `acquire` is a critical section, and this
+        // runs once a frame with the picture waiting on it: a logger that blocks,
+        // or a deadlock against a log in thread context, would be the frozen
+        // panel this project has already met once. The driver logs its startup
+        // and nothing else; the examples log from their own loops.
         engine.step_frame()
     });
 
@@ -617,6 +622,12 @@ fn bring_up(
     let divider = divider as u16;
     let achieved =
         Rate::<u32, 1, 1>::from_raw(system_clock.to_Hz() / divider as u32 / CYCLES_PER_WORD);
+    crate::log_info!(
+        "pio divider /{=u16}, {=u32} Hz panel clock, {=usize} pins",
+        divider,
+        achieved.to_Hz(),
+        PIN_COUNT
+    );
 
     let (mut pio, sm0, _, _, _) = pio.split(resets);
 
@@ -829,6 +840,12 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
         });
         debug_assert_eq!(runs, expected as u32, "the table is one run per repetition");
         assert!(frame_words > 0, "a refresh of no words has no refresh rate");
+        crate::log_info!(
+            "{=u32} run descriptors, {=u32} words a refresh, {=u32} Hz",
+            runs,
+            frame_words,
+            panel_clock.to_Hz() / frame_words
+        );
 
         SWAP_DONE.store(false, Ordering::Release);
 

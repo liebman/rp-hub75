@@ -1,4 +1,4 @@
-//! M5: double buffering, the engine interrupt, and telemetry over USB CDC.
+//! M5: double buffering, the engine interrupt, and telemetry over RTT.
 //!
 //! The same driver as `gradient`, with the two things a real application wants
 //! on top:
@@ -6,43 +6,39 @@
 //! * **The interrupt.** One per frame, and it is the only one: the control
 //!   channel plays the descriptor table and the data channel chains back to it,
 //!   so the handler runs at the terminator — to apply a swap and restart the
-//!   chain — and nowhere else. The `irqs` column counts its entries, so it
-//!   should track the `frame` column one for one.
-//! * **Telemetry** over USB CDC, because GP0/GP1 are panel data and there is no
-//!   UART: fps, the interrupt count and the swap count, once a second. The
-//!   writes are bounded and drop lines rather than block the loop — telemetry
-//!   must never be able to stop the panel.
+//!   chain — and nowhere else. `IRQ_COUNT` counts its entries, so it should track
+//!   the frame count one for one.
+//! * **Telemetry** over RTT, because GP0/GP1 are panel data and there is no UART:
+//!   frames, interrupts and swaps once a second, through `defmt` to the debug
+//!   probe. The driver's own startup lines come out of the same channel, so one
+//!   `probe-rs run` shows the configuration and the counters together.
 //!
-//! The panel shows the same static *linear* ramp as `gradient` — equal light per
-//! column, no gamma, so a wrong BCM weight kinks the line — with the loop’s frame
-//! count on top. The bench therefore needs no host at all to spot a stall: the
-//! digit ticks continuously (frames modulo ten, about fifteen times a second
-//! here), and if it ever stops, the loop has.
+//! The panel shows a static *linear* ramp — equal light per column, no gamma, so
+//! a wrong BCM weight kinks the line — with the loop's frame count on top, and
+//! that display is the point: it needs no host to spot a stall. The digit is
+//! blurred by the frame rate, so a digit that stops moving while the ramp stays put
+//! means the *loop* has stopped even though the panel is still refreshing.
 //!
 //! ```text
-//! # board in BOOTSEL mode:
+//! # probe attached:
 //! cargo run-arm --example telemetry
-//! # then, on the host:
-//! cat /dev/cu.usbmodem*
 //! ```
 #![no_std]
 #![no_main]
 
-use core::fmt::{self, Write};
 use core::future::Future;
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
+use defmt_rtt as _;
 use embedded_graphics::geometry::Point;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
-use panic_halt as _;
+use panic_probe as _;
 use rp235x_hal as hal;
-use usb_device::{class_prelude::*, prelude::*};
-use usbd_serial::SerialPort;
 
 use hal::Sio;
 use hal::clocks::Clock;
@@ -73,7 +69,6 @@ const PLANES: usize = BIT_DEPTH as usize;
 /// each run's address in the descriptor table, so neither a framebuffer's address
 /// nor its alignment changes the picture or the interrupt load.
 type Fb = DmaFrameBuffer<NROWS, WORDS_PER_ROW, PLANES>;
-type UsbBus = hal::usb::UsbBus;
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
 ///
@@ -111,45 +106,13 @@ extern "C" fn DMA_IRQ_1() {
     rp_hub75::on_dma_irq();
 }
 
-/// A USB serial writer for telemetry.
+/// A one-shot executor: drives a future to completion.
 ///
-/// Deliberately **not** the "write every byte, whatever it takes" writer that
-/// `hello_usb` uses. This one runs inside the display loop, so a host that stops
-/// reading must not stop the panel: the write tries for a bounded number of USB
-/// polls and then gives up, dropping the rest of the line. Losing a line of
-/// telemetry is fine; a frozen panel is not.
-struct UsbLog<'a, 'b> {
-    usb_dev: &'a mut UsbDevice<'b, UsbBus>,
-    serial: &'a mut SerialPort<'b, UsbBus>,
-}
-
-/// USB polls one log write may cost before it gives up.
-const LOG_POLL_BUDGET: u32 = 2_000;
-
-impl fmt::Write for UsbLog<'_, '_> {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        let mut remaining = s.as_bytes();
-        for _ in 0..LOG_POLL_BUDGET {
-            if remaining.is_empty() {
-                return Ok(());
-            }
-            self.usb_dev.poll(&mut [&mut *self.serial]);
-            if let Ok(count) = self.serial.write(remaining) {
-                remaining = &remaining[count..];
-            }
-        }
-        Err(fmt::Error)
-    }
-}
-
-/// A one-shot executor: drives a future to completion, servicing the USB stack
-/// between polls.
-///
-/// The swap is driven by the poll itself (and by the interrupt), so the waker
-/// only has to exist — parking the caller is what it is for, not scheduling. The
-/// `service` closure is what an executor does with the time: keeping the USB
-/// stack alive means parking on a swap costs the telemetry nothing.
-fn block_on<F: Future, S: FnMut()>(future: F, mut service: S) -> F::Output {
+/// The waker only has to exist — parking the caller is what it is for, not
+/// scheduling, and the interrupt is what ends the wait — so its vtable does
+/// nothing and the loop simply re-polls. That is enough for `wait_for_done`,
+/// which reads a flag the interrupt sets.
+fn block_on<F: Future>(future: F) -> F::Output {
     static DUMMY: () = ();
     const VTABLE: RawWakerVTable = RawWakerVTable::new(|_| raw_waker(), |_| {}, |_| {}, |_| {});
     const fn raw_waker() -> RawWaker {
@@ -164,7 +127,7 @@ fn block_on<F: Future, S: FnMut()>(future: F, mut service: S) -> F::Output {
         if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
             return value;
         }
-        service();
+        core::hint::spin_loop();
     }
 }
 
@@ -194,25 +157,6 @@ fn main() -> ! {
     .unwrap();
 
     let timer = hal::Timer::new_timer0(pac.TIMER0, &mut pac.RESETS, &clocks);
-
-    let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
-        pac.USB,
-        pac.USB_DPRAM,
-        clocks.usb_clock,
-        true,
-        &mut pac.RESETS,
-    ));
-    let mut serial = SerialPort::new(&usb_bus);
-    let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
-        .strings(&[StringDescriptors::default()
-            .manufacturer("rp-hub75")
-            .product("Interstate 75 W (RP2350)")
-            .serial_number("rp-hub75")])
-        .unwrap()
-        .max_packet_size_0(64)
-        .unwrap()
-        .device_class(2) // CDC
-        .build();
 
     let sio = Sio::new(pac.SIO);
     let pins = Pins::new(
@@ -260,87 +204,54 @@ fn main() -> ! {
     .expect("failed to start the panel");
 
     let mut reports: u32 = 0;
-    let mut banner_sent = false;
-    let mut last_report = 0u64;
+    let mut last_report = timer.get_counter().ticks();
     let mut frames: u32 = 0;
     let mut swaps: u32 = 0;
 
+    rp_hub75::log_info!(
+        "telemetry: {}x{}, {} planes, {} Hz refresh, {} runs a refresh, one \
+         interrupt a frame",
+        PANEL_WIDTH,
+        PANEL_HEIGHT,
+        BIT_DEPTH,
+        hub75.refresh_hz(),
+        hub75.runs_per_refresh()
+    );
+
     let mut fb = fb1;
     loop {
-        usb_dev.poll(&mut [&mut serial]);
         let now = timer.get_counter().ticks();
 
         // Draw, then hand the buffer over and park until the swap is applied.
-        // The digit on the panel is this counter, so watching it tick is watching
+        // The digit on the panel is this counter, so watching it move is watching
         // the loop (and therefore the swaps) run.
         draw(fb, frames);
         frames += 1;
 
         match hub75.swap(fb) {
             Ok(mut swap) => {
-                // Service USB while parked: a swap is up to a frame of waiting,
-                // and the host must keep being answered.
-                block_on(swap.wait_for_done(), || {
-                    usb_dev.poll(&mut [&mut serial]);
-                });
+                block_on(swap.wait_for_done());
                 fb = swap.wait();
                 swaps += 1;
             }
             Err((_error, returned)) => fb = returned,
         }
 
-        if !banner_sent && now >= 2_000_000 {
-            banner_sent = true;
-            last_report = now;
-            let mut logger = UsbLog {
-                usb_dev: &mut usb_dev,
-                serial: &mut serial,
-            };
-            // A failed write is a dropped line, not a stalled panel.
-            let _ = write!(logger, "{}", Banner(&hub75));
-        }
-
-        if banner_sent && now - last_report >= 1_000_000 {
+        // One line a second. One interrupt a frame, so `irqs` and `frames` move
+        // together; RTT drops a line rather than blocking if the host is not
+        // reading, so this cannot stop the panel.
+        if now - last_report >= 1_000_000 {
             last_report = now;
             reports += 1;
-            let mut logger = UsbLog {
-                usb_dev: &mut usb_dev,
-                serial: &mut serial,
-            };
-            // One interrupt a frame, so this count tracks the frame count.
-            let _ = write!(
-                logger,
-                "{:>4}  {:>5}  {:>4}  {:>11}\r\n",
+            rp_hub75::log_info!(
+                "report {}: {} frames, {} irqs, {} swaps",
                 reports,
                 frames,
                 IRQ_COUNT.load(Ordering::Relaxed),
-                swaps,
+                swaps
             );
             frames = 0;
         }
-    }
-}
-
-/// The one-time description of what the panel is doing.
-struct Banner<'a>(&'a Hub75<Fb>);
-
-impl fmt::Display for Banner<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "\r\npanel {}x{}, {} planes, {} Hz refresh, divider /{}\r\n\
-             {} runs a refresh, played by a descriptor table — the\r\n\
-             framebuffer's own BCM sequence, one entry per repetition,\r\n\
-             and one interrupt a frame at its terminator; a swap is armed\r\n\
-             every frame\r\n\
-             report  frame   irqs    swap_waited\r\n",
-            PANEL_WIDTH,
-            PANEL_HEIGHT,
-            BIT_DEPTH,
-            self.0.refresh_hz(),
-            self.0.divider(),
-            self.0.runs_per_refresh(),
-        )
     }
 }
 
@@ -382,7 +293,7 @@ pub static PICOTOOL_ENTRIES: [hal::binary_info::EntryAddr; 4] = [
     hal::binary_info::rp_cargo_bin_name!(),
     hal::binary_info::rp_cargo_version!(),
     hal::binary_info::rp_program_description!(
-        c"rp-hub75 M5: double buffering, wake IRQ, telemetry"
+        c"rp-hub75 M5: double buffering, wake IRQ, telemetry over RTT"
     ),
     hal::binary_info::rp_program_build_attribute!(),
 ];
