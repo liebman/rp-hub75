@@ -2,10 +2,24 @@
 set -e
 
 # Build the rp-hub75 library and its examples for the RP2350 (Cortex-M33).
-echo "=========================================="
-echo "Building (library): cargo build-arm"
-echo "=========================================="
-cargo build-arm
+#
+# The library is built once per library feature combination: `invert-clock` and
+# `invert-oe` select code paths in the library itself. The examples go through
+# `Hub75` and name no polarity, so they are built once.
+#
+# `20mhz` is an example feature — it sets the rate the examples ask for through
+# `cfg!`, which compiles both arms in every build — so it is not part of the loop.
+for features in "" "invert-clock" "invert-oe" "invert-clock,invert-oe"; do
+    if [ -n "$features" ]; then
+        extra=(--features "$features")
+    else
+        extra=()
+    fi
+    echo "=========================================="
+    echo "Building (library): cargo build-arm ${extra[*]}"
+    echo "=========================================="
+    cargo build-arm "${extra[@]}"
+done
 
 echo "=========================================="
 echo "Building (examples): cargo build-arm --examples"

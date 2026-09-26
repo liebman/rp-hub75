@@ -88,6 +88,8 @@ use hal::fugit::Rate;
 use hal::gpio::DynPinId;
 use hal::gpio::FunctionNull;
 use hal::gpio::FunctionPio0;
+#[cfg(feature = "invert-clock")]
+use hal::gpio::OutputOverride;
 use hal::gpio::PullNone;
 use hal::gpio::PullType;
 use hal::pac;
@@ -141,6 +143,10 @@ pub const PIN_COUNT: usize = pins::WORD_PINS as usize;
 // ---------------------------------------------------------------------------
 
 /// How the panel is driven.
+///
+/// What a panel wants *electrically* is a build-time choice, not a field: the
+/// `invert-clock` feature moves the edge it samples a column on, and
+/// `invert-oe` the level that blanks it.
 #[derive(Debug, Clone, Copy)]
 pub struct Hub75Config {
     /// DMA interrupt line the application bound [`on_dma_irq`] to.
@@ -153,18 +159,11 @@ pub struct Hub75Config {
     pub interrupt: pac::Interrupt,
     /// Panel shift-clock frequency — one word, one column, per period.
     pub panel_clock: Rate<u32, 1, 1>,
-    /// Which clock edge the panel takes a column on.
-    ///
-    /// `false` for the usual panel, which shifts on the clock's rising edge.
-    /// This only moves which edge the panel samples; the word itself always
-    /// changes a cycle earlier, so the panel gets a full cycle of setup either
-    /// way (see [`crate::programs`]).
-    pub invert_clock: bool,
 }
 
 impl Hub75Config {
-    /// The recommended configuration: an 18.75 MHz panel clock, the usual clock
-    /// edge, and `interrupt` as the wake-up line.
+    /// The recommended configuration: an 18.75 MHz panel clock and `interrupt`
+    /// as the wake-up line.
     ///
     /// 18.75 MHz is 150 MHz / 4 / 2: a word every two PIO cycles. The refresh
     /// rate then follows the *layout* — one refresh is the framebuffer's whole
@@ -176,7 +175,6 @@ impl Hub75Config {
         Self {
             interrupt,
             panel_clock: Rate::<u32, 1, 1>::kHz(18_750),
-            invert_clock: false,
         }
     }
 
@@ -189,13 +187,6 @@ impl Hub75Config {
     #[must_use]
     pub const fn with_panel_clock(mut self, panel_clock: Rate<u32, 1, 1>) -> Self {
         self.panel_clock = panel_clock;
-        self
-    }
-
-    /// Selects the clock edge the panel takes a column on.
-    #[must_use]
-    pub const fn with_invert_clock(mut self, invert_clock: bool) -> Self {
-        self.invert_clock = invert_clock;
         self
     }
 }
@@ -286,6 +277,20 @@ impl Hub75Pins {
                 hold(oe),
             ],
         }
+    }
+
+    /// Inverts the clock pin's output in the GPIO block.
+    ///
+    /// A panel that takes the column on the clock's falling edge gets it here, not
+    /// from a second program: the pad inverts whatever the PIO drives on that pin —
+    /// the side-set and the word's own bit 11 alike — and both write zero on the
+    /// cycle the word changes, so the two agree and the whole bus stays in step with
+    /// the clock.
+    #[cfg(feature = "invert-clock")]
+    fn invert_clock(&mut self) {
+        let index = (pins::CLK - pins::WORD_BASE) as usize;
+        debug_assert_eq!(self.hold[index].id().num, pins::CLK);
+        self.hold[index].set_output_override(OutputOverride::Invert);
     }
 
     /// The GPIO numbers held, in bus order (`pins::R0` … `pins::OE`).
@@ -671,8 +676,15 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
             "Hub75Pins must be handed over in HUB75 bus order"
         );
 
+        // The clock's polarity is the pad's, so the pin is inverted before the
+        // machine starts and the first clock level is already the idle one.
+        #[cfg(feature = "invert-clock")]
+        let mut pins = pins;
+        #[cfg(feature = "invert-clock")]
+        pins.invert_clock();
+
         let program = pio
-            .install(&hub75_stream(config.invert_clock))
+            .install(&hub75_stream())
             .expect("the stream program fits the instruction memory");
         let (mut sm, _, tx) = PIOBuilder::from_installed_program(program)
             .out_pins(pins::WORD_BASE, pins::WORD_PINS)

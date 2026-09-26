@@ -13,18 +13,23 @@ version = "0.1.0"
 name = "rp_hub75"
 
 [features]
-# The examples' panel clock: 10 MHz with this off, 20 MHz with it, as the
-# esp-hub75 examples do. The driver takes whatever rate it is given and rounds
-# the divider up, so 20 MHz here means "as close to 20 MHz as a divider allows
-# without exceeding it" — 18.75 MHz on the examples' 150 MHz system clock, which
-# is the configuration every rate in NOTES.md was measured at.
-20mhz = []
+# --- Library features --------------------------------------------------------
+#
+# These change what the driver compiles and how it drives the panel. The ones
+# that forward to `hub75-framebuffer` change the words the driver streams: the
+# framebuffer's layout, and the blanking it inserts around rows.
+#
+# Invert the panel's shift clock in the GPIO block, for a panel that takes a
+# column on the clock's falling edge. The clock is the one signal the PIO
+# generates rather than copies out of the framebuffer's words, so its polarity
+# belongs to the pad (`IO_BANK0` `GPIOx` `CTRL` `OUTOVER`) and one program runs
+# either way. RP2350-only, like the driver.
+invert-clock = []
 
 # Forward the panel's output-enable polarity to `hub75-framebuffer`, rather
 # than defining a second switch that can disagree with it. The OE pin is
-# driven straight out of the framebuffer's words, so the crate's words and the
-# driver's blank plane (see `driver::BLANK_WORD`) must flip together.
-# `rp235x-hal`'s `critical-section-impl` means `critical_section` is real.
+# driven straight out of the framebuffer's words, so the crate's words are the
+# only place the blanking level lives.
 invert-oe = ["hub75-framebuffer/invert-oe"]
 
 skip-black-pixels = ["hub75-framebuffer/skip-black-pixels"]
@@ -49,9 +54,21 @@ inter-row-blank-32 = ["hub75-framebuffer/inter-row-blank-32"]
 
 reverse-row-order = ["hub75-framebuffer/reverse-row-order"]
 
+# --- Example features --------------------------------------------------------
+#
+# Read by `examples/` only; they change nothing in the library.
+#
+# The examples' panel clock: 10 MHz with this off, 20 MHz with it, as the
+# esp-hub75 examples do. The driver takes whatever rate it is given and rounds
+# the divider up, so 20 MHz here means "as close to 20 MHz as a divider allows
+# without exceeding it" — 18.75 MHz on the examples' 150 MHz system clock, which
+# is the configuration every rate in NOTES.md was measured at.
+20mhz = []
+
 [dependencies]
 # The driver's swap state is shared with the DMA interrupt, so it lives in a
-# `critical_section::Mutex`. The implementation comes from `rp235x-hal`.
+# `critical_section::Mutex`. `rp235x-hal`'s `critical-section-impl` means
+# `critical_section` is real.
 critical-section = "1.2"
 embedded-graphics = "0.8.2"
 # `interstate75` reorders the plain bitplane words so bit n is pin n for the

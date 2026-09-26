@@ -41,16 +41,11 @@
 //! it into the panel, with the word stable for a whole PIO cycle before that
 //! edge.
 //!
-//! [`hub75_stream`] with `invert_clock` is the same two cycles with the side-set
-//! values swapped, for a panel that takes the column on the clock's *falling*
-//! edge:
-//!
-//! ```text
-//! cycle         1                     2
-//!               out pins, 14  side 1   nop  side 0
-//! GP11 (CLK)    high                   falling edge
-//! panel         data changes           shifts this column in
-//! ```
+//! The program is the same for either clock edge: the word goes out with the
+//! clock at its idle level, and a full PIO cycle later the edge shifts it into the
+//! panel. A panel that takes the column on the *falling* edge gets that edge from
+//! the clock pin's own output override, which inverts the pad rather than the
+//! program — [`crate::driver`] sets it under the `invert-clock` feature.
 //!
 //! # The one invariant
 //!
@@ -63,26 +58,19 @@
 //! # The one hair: bit 11
 //!
 //! The reserved clock slot sits inside the `out pins, 14` window, so every word
-//! drives GP11 as well as the side-set does, and bit 11 is always zero. On a
-//! normal panel that costs nothing: its `out` runs on the cycle whose side-set
-//! holds the clock low, so the two write the same level and either one winning
-//! gives the same pins.
+//! drives GP11 as well as the side-set does, and bit 11 is always zero. That costs
+//! nothing: the `out` runs on the cycle whose side-set holds the clock low, so the
+//! two write the same level and either one winning gives the same pins. The clock's
+//! polarity is the pad's, which inverts both writes together, so the agreement
+//! holds for either edge a panel takes.
 //!
-//! The inverted variant is the one place they disagree — its `out` runs with the
-//! side-set asking for the clock *high* while the word writes a zero to that pin —
-//! and there the PIO's own rule settles it, RP2350 datasheet §11.5.6: *"If a
+//! The tests still assert that the two windows only ever overlap on the clock pin.
+//! A side-set aimed at another bus pin would be a fight with every word that
+//! follows, and the side-set would win it — RP2350 datasheet §11.5.6, *"If a
 //! side-set overlaps with an OUT/SET performed by that state machine on the same
-//! cycle, the side-set takes precedence in the overlapping region"* (the same
-//! thing stated for the pin-mapping chapter in §11.2.6). So GP11 ends that cycle
-//! high, the clock falls cleanly on the next one, and the inverted program is
-//! exactly what it looks like: the normal program with one bit of side-set flipped.
-//! The emulator implements the rule, by applying the side-set over the instruction's
-//! own pin write.
-//!
-//! The tests still assert that the two windows only ever overlap on the clock pin:
-//! a side-set aimed at another bus pin would be a fight with every word that
-//! follows, and the side-set would win it — a silent corruption of that pin rather
-//! than an error, which is the fault the check exists to catch.
+//! cycle, the side-set takes precedence in the overlapping region"* — so the
+//! corruption of that pin would be silent rather than an error. The emulator
+//! applies the rule by writing the side-set over the instruction's own pin write.
 //!
 //! # The latch, and the one thing left to see on hardware
 //!
@@ -138,33 +126,19 @@ pub const CYCLES_PER_WORD: u32 = 2;
 /// least-significant bit first, and `Left` reverses every word, which turns the
 /// picture into noise. Then `set_pindirs` all fourteen pins as outputs.
 ///
-/// `invert_clock` picks the edge the panel takes a column on: `false` for the
-/// usual panel, which shifts on the clock's rising edge, and `true` for one that
-/// shifts on the falling edge. The two programs are the same two instructions
-/// with the side-set values swapped, so the word always changes with the clock at
-/// its idle level and the panel always gets a full cycle of setup before the edge
-/// it samples on. The inverted one is the variant whose `out` and side-set
-/// disagree about GP11 — see the module docs.
-pub fn hub75_stream(invert_clock: bool) -> Program<{ RP2040_MAX_PROGRAM_SIZE }> {
-    if invert_clock {
-        pio::pio_asm!(
-            ".side_set 1",
-            ".wrap_target",
-            "    out pins, 14     side 1   ; the word -> GP0-13, clock high",
-            "    nop              side 0   ; CLK falling edge: the panel shifts this column in",
-            ".wrap",
-        )
-        .program
-    } else {
-        pio::pio_asm!(
-            ".side_set 1",
-            ".wrap_target",
-            "    out pins, 14     side 0   ; the word -> GP0-13, clock low",
-            "    nop              side 1   ; CLK rising edge: the panel shifts this column in",
-            ".wrap",
-        )
-        .program
-    }
+/// The program is the same for either clock edge: the word changes with the clock
+/// at its idle level, so the panel gets a full cycle of setup before the edge it
+/// samples. A panel that wants the falling edge gets it from the clock pin's
+/// output override rather than from a second program — see [`crate::driver`].
+pub fn hub75_stream() -> Program<{ RP2040_MAX_PROGRAM_SIZE }> {
+    pio::pio_asm!(
+        ".side_set 1",
+        ".wrap_target",
+        "    out pins, 14     side 0   ; the word -> GP0-13, clock low",
+        "    nop              side 1   ; CLK rising edge: the panel shifts this column in",
+        ".wrap",
+    )
+    .program
 }
 
 #[cfg(test)]
@@ -176,6 +150,15 @@ mod tests {
     use hub75_framebuffer::FrameBuffer;
     use hub75_framebuffer::bitplane::plain::DmaFrameBuffer;
     use pio::{Instruction, InstructionOperands, MovDestination, MovSource, OutDestination};
+
+    /// The clock edge the crate is built for: the `invert-clock` feature inverts
+    /// the clock pin's output in the pad, which moves the panel's sampling edge to
+    /// the clock's falling one.
+    ///
+    /// Only the picture tests read it, and they model the default OE polarity, so
+    /// this is dead code under `invert-oe`.
+    #[cfg_attr(feature = "invert-oe", allow(dead_code))]
+    const INVERT_CLOCK: bool = cfg!(feature = "invert-clock");
 
     /// The fourteen HUB75 pins, GP0-GP13, as the program leaves them.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -235,6 +218,10 @@ mod tests {
         window: (u8, u8),
         /// The side-set window: base and pin count, which here is the clock.
         side_set: (u8, u8),
+        /// Pins whose pad output the GPIO block inverts — `IO_BANK0` `GPIOx`
+        /// `CTRL` `OUTOVER`, bit *n* for pin *n*. The clock pin is the one the
+        /// driver sets, under the `invert-clock` feature.
+        pad_invert: u16,
         words: &'a [u16],
         /// Index of the next word to pull.
         next: usize,
@@ -253,13 +240,23 @@ mod tests {
             program: Program<{ RP2040_MAX_PROGRAM_SIZE }>,
             window: (u8, u8),
             side_set_base: u8,
+            pad_invert: u16,
             words: &'a [u16],
         ) -> Self {
             let side_set = (side_set_base, program.side_set.bits());
+            // Inverting a bus pin at the pad would invert the framebuffer's own
+            // words, which is not what the driver does: only the clock, which the
+            // program generates rather than copies out of a word, is inverted.
+            assert_eq!(
+                pad_invert & !(1u16 << pins::CLK),
+                0,
+                "only the clock may be inverted at the pad"
+            );
             Self {
                 program,
                 window,
                 side_set,
+                pad_invert,
                 words,
                 next: 0,
                 pc: 0,
@@ -270,15 +267,23 @@ mod tests {
             }
         }
 
+        /// Returns whether the GPIO block inverts `pin`'s output.
+        fn pad_inverts(&self, pin: u8) -> bool {
+            self.pad_invert & (1u16 << pin) != 0
+        }
+
         /// Execute one instruction, which is one PIO cycle.
         fn step(&mut self, pins: &mut Pins) {
             let instruction =
                 Instruction::decode(self.program.code[self.pc], self.program.side_set).unwrap();
 
-            // The hardware applies the side-set at the top of the instruction.
+            // The hardware applies the side-set at the top of the instruction,
+            // and the GPIO block inverts the pad's output after it.
             if let Some(value) = instruction.side_set {
                 for offset in 0..self.side_set.1 {
-                    pins.level[(self.side_set.0 + offset) as usize] = value & (1 << offset) != 0;
+                    let absolute = self.side_set.0 + offset;
+                    let level = value & (1 << offset) != 0;
+                    pins.level[absolute as usize] = level ^ self.pad_inverts(absolute);
                 }
             }
 
@@ -331,9 +336,10 @@ mod tests {
                                 // overlaps with an OUT/SET performed by that state
                                 // machine on the same cycle, the side-set takes
                                 // precedence in the overlapping region" (RP2350
-                                // datasheet §11.5.6). That is what lets the
-                                // inverted program hold the clock high on a cycle
-                                // where the word writes a zero to that pin.
+                                // datasheet §11.5.6). On the clock the two agree —
+                                // the word's bit 11 is clear and the side-set writes
+                                // zero on this cycle — so which of them lands does
+                                // not matter.
                                 //
                                 // The only pin they may share is the clock. The
                                 // crate's reserved bit 11 is what lets one `out`
@@ -352,7 +358,7 @@ mod tests {
                                     continue;
                                 }
 
-                                pins.level[absolute as usize] = level;
+                                pins.level[absolute as usize] = level ^ self.pad_inverts(absolute);
                             }
                         }
                         OutDestination::NULL => {}
@@ -413,20 +419,25 @@ mod tests {
     ///   on the bus for the whole of the clock edge: the setup and hold the panel
     ///   needs;
     /// * one clock edge per word, with the colours, the address, the latch and
-    ///   OE already on the pins — rising for a normal panel, falling for one
-    ///   whose clock is inverted;
+    ///   OE already on the pins — rising, or falling when the clock pin's output
+    ///   is inverted in the pad;
     /// * at the end of each word the pins carry that word, bit for bit, which is
     ///   what "the framebuffer goes out as-is" means.
     ///
     /// The words are the shape a framebuffer writes: bit 11 clear, always.
     ///
+    /// `invert_clock` inverts the clock pin in the pad, which is what the
+    /// `invert-clock` feature does on hardware; the model carries it as a
+    /// parameter so both polarities stay reachable in one build.
+    ///
     /// Returns the cycles run and the number of clock edges seen.
     fn stream(words: &[u16], invert_clock: bool) -> (u32, usize) {
         let mut pins = Pins::default();
         let mut machine = Sm::new(
-            hub75_stream(invert_clock),
+            hub75_stream(),
             (pins::WORD_BASE, pins::WORD_PINS),
             pins::CLK,
+            if invert_clock { 1 << pins::CLK } else { 0 },
             words,
         );
         let mut cycles = 0;
@@ -443,9 +454,9 @@ mod tests {
             );
 
             // The word goes out on the first cycle with the clock at its idle
-            // level — low for a normal panel, high for an inverted one — and
-            // nothing but the clock moves after that: it is the one pin the
-            // program generates rather than copies out of the word.
+            // level — low, or high when the pad inverts the pin — and nothing but
+            // the clock moves after that: it is the one pin the program generates
+            // rather than copies out of the word.
             assert_eq!(
                 cycle[0].clock(),
                 invert_clock,
@@ -508,7 +519,7 @@ mod tests {
         );
         assert_eq!(machine.cycles, words.len() as u32 * CYCLES_PER_WORD);
         assert_eq!(
-            hub75_stream(invert_clock).code.len() as u32,
+            hub75_stream().code.len() as u32,
             CYCLES_PER_WORD,
             "the program is one wrap: the word and the clock edge"
         );
@@ -564,17 +575,12 @@ mod tests {
         assert_eq!(edges, WORDS.len());
     }
 
-    /// The same stream with the clock inverted, for a panel that takes the
-    /// column on the falling edge: the same words at the same rate, the edge the
-    /// panel cares about at the other level, and the side-set values swapped.
-    /// Everything else about the two waveforms is asserted identically by
-    /// [`stream`], which is the point: invert-clock is one bit of side-set, not a
-    /// second design.
-    ///
-    /// It is also the test of the side-set precedence rule (RP2350 §11.5.6): the
-    /// clock has to stay *high* through the cycle whose word writes a zero to that
-    /// pin, so [`stream`]'s "the word changes with the clock at its idle level"
-    /// only holds if the side-set wins the overlap.
+    /// The same stream with the clock pin's output inverted, which is what the
+    /// `invert-clock` feature gives a panel that takes the column on the falling
+    /// edge: the same words at the same rate, with the edge the panel cares about
+    /// at the other level. Everything else about the two waveforms is asserted
+    /// identically by [`stream`], which is the point: the polarity is the pad's,
+    /// not a second design.
     #[test]
     fn the_inverted_clock_shifts_on_the_falling_edge() {
         let (cycles, edges) = stream(&WORDS, true);
@@ -593,9 +599,10 @@ mod tests {
         let words = [0x0000u16];
         let mut pins = Pins::default();
         let mut machine = Sm::new(
-            hub75_stream(false),
+            hub75_stream(),
             (pins::WORD_BASE, pins::WORD_PINS),
             pins::ROW_A,
+            0,
             &words,
         );
         let _ = clock_out(&mut machine, &mut pins, 0);
@@ -620,9 +627,8 @@ mod tests {
         let words = unsafe { segment_words(&fb) };
 
         // The words the crate really writes leave the reserved clock slot clear,
-        // which is what keeps the normal variant independent of *which* of the two
-        // writes wins GP11 on an `out` cycle. (The inverted variant is the one
-        // that needs the side-set to win — see the module docs.)
+        // which is what keeps the program independent of *which* of the two writes
+        // wins GP11 on an `out` cycle — see the module docs.
         assert!(
             words.iter().all(|word| *word & (1 << pins::CLK) == 0),
             "bit 11 is the PIO's clock and the crate leaves it clear"
@@ -687,6 +693,9 @@ mod tests {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Strobe {
         AtRelease,
+        /// The test that constructs this one models the default OE polarity, so
+        /// the variant is unconstructed under `invert-oe`.
+        #[cfg_attr(feature = "invert-oe", allow(dead_code))]
         AtRise,
     }
 
@@ -783,7 +792,10 @@ mod tests {
         }
 
         /// The refresh as a picture: one line per panel row, `.` for a pixel
-        /// that never lit, `1`-`9` for how much of its duty cycle it got.
+        /// that never lit, `1`-`9` for how much of its duty cycle it got. Its
+        /// caller models the default OE polarity, so this is dead code under
+        /// `invert-oe`.
+        #[cfg_attr(feature = "invert-oe", allow(dead_code))]
         fn render(&self) -> std::vec::Vec<std::string::String> {
             let peak = self.lit.iter().flatten().copied().max().unwrap_or(1).max(1);
             (0..PANEL_HEIGHT)
@@ -821,9 +833,10 @@ mod tests {
             Self {
                 pins: Pins::default(),
                 machine: Sm::new(
-                    hub75_stream(invert_clock),
+                    hub75_stream(),
                     (pins::WORD_BASE, pins::WORD_PINS),
                     pins::CLK,
+                    if invert_clock { 1 << pins::CLK } else { 0 },
                     words,
                 ),
             }
@@ -855,8 +868,8 @@ mod tests {
     /// needs blanked for its latch and address change: 63 of a slot's 64 words.
     /// The emulator models the default OE polarity (bit 13 high = blanked). With
     /// the crate's `invert-oe` feature the *words* flip that level, and the model
-    /// would have to flip with it — the driver only needs the crate and the blank
-    /// plane to agree, which is what `table`'s own tests check.
+    /// would have to flip with it: the driver streams the crate's words and nothing
+    /// else, so that convention is the blanking level.
     #[cfg(not(feature = "invert-oe"))]
     #[test]
     fn the_panel_shows_the_diagonal_where_the_framebuffer_put_it() {
@@ -864,8 +877,8 @@ mod tests {
         // SAFETY: the slice is used while `fb` is alive.
         let words = unsafe { segment_words(&fb) };
 
-        let mut panel = Panel::new(Strobe::AtRelease, false);
-        let mut stream = Stream::new(words, false);
+        let mut panel = Panel::new(Strobe::AtRelease, INVERT_CLOCK);
+        let mut stream = Stream::new(words, INVERT_CLOCK);
         // The first pass fills the panel's latches; the second is the steady
         // state the eye sees, and the release of the first pass's last latch
         // happens on the first word of it.
@@ -942,8 +955,8 @@ mod tests {
         // SAFETY: the slice is used while `fb` is alive.
         let words = unsafe { segment_words(&fb) };
 
-        let mut panel = Panel::new(Strobe::AtRise, false);
-        let mut stream = Stream::new(words, false);
+        let mut panel = Panel::new(Strobe::AtRise, INVERT_CLOCK);
+        let mut stream = Stream::new(words, INVERT_CLOCK);
         stream.refresh(&mut panel);
         panel.reset_lit();
         stream.refresh(&mut panel);

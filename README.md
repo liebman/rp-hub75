@@ -47,10 +47,28 @@ loop {
 
 ## Cargo features
 
+The two groups are separate: only the library features change what the crate
+compiles and how the panel is driven.
+
+### Library features
+
+| feature | effect |
+|---|---|
+| `invert-clock` | inverts the clock pin's output in the GPIO block (`IO_BANK0` `GPIOx` `CTRL` `OUTOVER`) for a panel that takes a column on the clock's falling edge. The clock is the one signal the PIO generates rather than copies out of a word, so its polarity is the pin's and one program runs either way. RP2350-only, like the driver. |
+| `invert-oe` | forwards to `hub75-framebuffer/invert-oe` for a panel whose output enable is active-high. The crate's words are the only place that polarity lives, so there is one switch. |
+
+The rest forward to `hub75-framebuffer` and change the words the driver streams —
+the framebuffer's layout, and the blanking it inserts around rows:
+`skip-black-pixels`, `tail-closes-latch`, `lead-blank-1` through `lead-blank-32`,
+`trail-blank-1` through `trail-blank-32`, `inter-row-blank-4` through
+`inter-row-blank-32`, and `reverse-row-order`. [`Cargo.toml`](Cargo.toml) is the
+list.
+
+### Example features
+
 | feature | effect |
 |---|---|
 | `20mhz` | the examples' panel clock: 10 MHz without it, 20 MHz with it, as the esp-hub75 examples do. The divider is an integer rounded *up*, so 20 MHz here lands on 18.75 MHz — the clock every rate in [`NOTES.md`](NOTES.md) was measured at |
-| `invert-oe` | forwards to `hub75-framebuffer/invert-oe` for a panel whose output enable is active-high. The crate's words are the only place that polarity lives, so there is one switch. |
 
 ## Examples
 

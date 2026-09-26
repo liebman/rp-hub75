@@ -34,8 +34,14 @@ pub const ROW_D: u8 = 9;
 pub const ROW_E: u8 = 10;
 
 /// Shift-register clock, active high.
+///
+/// The PIO generates this pin rather than copying it out of a framebuffer word,
+/// so it is the one signal whose polarity the driver sets itself: a panel that
+/// takes the column on the falling edge is met by inverting this pin's output in
+/// the GPIO block (the crate's `invert-clock` feature), not by a second program.
 pub const CLK: u8 = 11;
-/// Strobe / latch, active high. Some panels want this inverted
+/// Strobe / latch, active high. A panel that wants this inverted drives it out
+/// of the framebuffer's words, whose polarity `hub75-framebuffer` selects
 /// (`stb_invert=True` in the MicroPython API).
 pub const STB: u8 = 12;
 /// Output enable, active low.
