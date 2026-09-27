@@ -271,10 +271,14 @@ fn main() -> ! {
 fn draw(fb: &mut Fb, frames: u32) {
     fb.erase();
     let width = PANEL_WIDTH as u32;
-    let last = rp_hub75::color::LEVELS - 1;
+    // The crate keeps the top `BIT_DEPTH` bits of a drawn byte, so a light level
+    // has to be shifted up to the top of the byte before it is drawn: level
+    // `last` is full scale, and the bits below `8 - BIT_DEPTH` are dropped.
+    let last = (1u32 << BIT_DEPTH) - 1;
+    let shift = 8 - BIT_DEPTH as u32;
     for row in 0..PANEL_HEIGHT as i32 {
         for column in 0..PANEL_WIDTH as i32 {
-            let value = rp_hub75::color::level(column as u32 * last / (width - 1));
+            let value = ((column as u32 * last / (width - 1)) << shift) as u8;
             fb.set_pixel(Point::new(column, row), Rgb888::new(value, value, value));
         }
     }

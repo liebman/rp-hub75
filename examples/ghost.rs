@@ -39,6 +39,8 @@
 
 use defmt_rtt as _;
 use embedded_graphics::geometry::Point;
+use embedded_graphics::pixelcolor::Rgb888;
+use embedded_graphics::pixelcolor::RgbColor;
 use panic_probe as _;
 use rp235x_hal as hal;
 
@@ -52,8 +54,6 @@ use hub75_framebuffer::bitplane::plain::DmaFrameBuffer;
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;
 use rp_hub75::Hub75Pins;
-use rp_hub75::color::LEVELS;
-use rp_hub75::color::grey;
 use rp_hub75::{BIT_DEPTH, PANEL_WIDTH, ROW_PAIRS, XTAL_FREQ_HZ};
 
 /// The interrupt that walks the framebuffer's BCM sequence (see `gradient`).
@@ -221,8 +221,10 @@ fn main() -> ! {
 fn draw(fb: &mut Fb, phase: u32, step: u32) {
     fb.erase();
     // All planes on: the brightest thing the panel can show, so that whatever
-    // does leak has the most light to leak with.
-    let on = grey(LEVELS - 1);
+    // does leak has the most light to leak with. The crate keeps the top
+    // `BIT_DEPTH` bits of a drawn byte, so 255 is light level 63 — the top of the
+    // panel's range — and this is the same light `252` would be.
+    let on = Rgb888::WHITE;
 
     match phase {
         // The dot: a fixed reference, blinking so that even a phase that does

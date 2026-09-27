@@ -69,7 +69,6 @@
 
 #![no_std]
 
-pub mod color;
 pub mod descriptor;
 pub mod driver;
 pub mod pins;

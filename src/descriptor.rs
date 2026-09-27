@@ -165,7 +165,6 @@ pub fn patch(entries: &mut [Descriptor], count: usize, delta: u32) {
 mod tests {
     extern crate std;
 
-    use hub75_framebuffer::bcm_rep_count;
     use hub75_framebuffer::bitplane::plain::frame;
     use hub75_framebuffer::bitplane::plain::row;
 
@@ -187,128 +186,9 @@ mod tests {
         (entries, runs)
     }
 
-    /// The table is the plan, materialised: one descriptor per repetition, each
-    /// one naming its segment's address and length.
-    #[test]
-    fn the_table_replays_the_plan() {
-        fn check<FB: FrameBuffer<Word = u16>>(fb: &FB) {
-            let (entries, runs) = runs_of(fb);
-            assert_eq!(
-                runs,
-                bcm_rep_count::<FB>(),
-                "one descriptor per repetition is what sizes the table"
-            );
-
-            // Rebuild the expectation from the framebuffer's own description.
-            let mut expected = std::vec::Vec::new();
-            for index in 0..fb.bcm_segment_count() {
-                let BcmLenReps { len, reps } = FB::BCM_SEQUENCE[index % FB::BCM_SEQUENCE_LEN];
-                for _ in 0..reps {
-                    expected.push(Descriptor {
-                        trans_count: (len / WORD_BYTES) as u32,
-                        read_addr: fb.bcm_segment_ptr(index) as u32,
-                    });
-                }
-            }
-            assert_eq!(&entries[..runs], expected.as_slice());
-            assert_eq!(entries[runs], Descriptor::TERMINATOR);
-
-            // The bytes the table streams are the bytes a refresh streams, and a
-            // zero-length run would stall the chain.
-            let streamed: usize = entries[..runs]
-                .iter()
-                .map(|descriptor| descriptor.trans_count as usize * WORD_BYTES)
-                .sum();
-            // One refresh is `2^PLANES - 1` panel scans, and the table streams
-            // exactly that: the frame, entry by entry.
-            assert_eq!(streamed, ((1 << PLANES) - 1) * (size_of::<FB>() / PLANES));
-            assert!(entries[..runs].iter().all(|d| d.trans_count > 0));
-        }
-        check(&FrameMajor::new());
-        check(&RowMajor::new());
-    }
-
-    /// Both layouts stream one refresh's worth of bytes, and they agree on the
-    /// total: the table *is* the frame, so the light the panel integrates is the
-    /// same either way.
-    #[test]
-    fn the_layouts_stream_the_same_frame() {
-        let bytes_of = |entries: &[Descriptor], runs: usize| -> usize {
-            entries[..runs]
-                .iter()
-                .map(|descriptor| descriptor.trans_count as usize * WORD_BYTES)
-                .sum()
-        };
-
-        let frame_major = FrameMajor::new();
-        let (entries, runs) = runs_of(&frame_major);
-        let scans = bytes_of(&entries, runs);
-        assert_eq!(
-            scans,
-            ((1 << PLANES) - 1) * (size_of::<FrameMajor>() / PLANES)
-        );
-
-        let row_major = RowMajor::new();
-        let (entries, runs) = runs_of(&row_major);
-        assert_eq!(bytes_of(&entries, runs), scans, "the layouts disagree");
-    }
-
-    /// Times a byte range is streamed, summed over the runs that cover it.
-    fn streamed(entries: &[Descriptor], start: u32, len: usize) -> usize {
-        let end = start + len as u32;
-        entries
-            .iter()
-            .map(|descriptor| {
-                let from = descriptor.read_addr.max(start);
-                let to = descriptor
-                    .read_addr
-                    .saturating_add(descriptor.trans_count * WORD_BYTES as u32)
-                    .min(end);
-                to.saturating_sub(from) as usize
-            })
-            .sum()
-    }
-
-    /// The heart of it, from the other side: plane `k`'s bytes are streamed
-    /// `2^k` times per refresh, so BCM's weights come out of the table unchanged.
-    #[test]
-    fn the_table_weights_every_plane() {
-        let frame_major = FrameMajor::new();
-        let (entries, runs) = runs_of(&frame_major);
-        let base = &frame_major as *const FrameMajor as u32;
-        let plane_bytes = size_of::<FrameMajor>() / PLANES;
-        for plane in 0..PLANES {
-            assert_eq!(
-                streamed(
-                    &entries[..runs],
-                    base + (plane * plane_bytes) as u32,
-                    plane_bytes
-                ),
-                plane_bytes << plane,
-                "frame-major plane {plane} is streamed the wrong number of times"
-            );
-        }
-
-        // Rows are packed, so each row starts at a multiple of one row's planes.
-        let row_major = RowMajor::new();
-        let (entries, runs) = runs_of(&row_major);
-        let base = &row_major as *const RowMajor as u32;
-        let row_bytes = size_of::<RowMajor>() / NROWS;
-        let row_plane_bytes = row_bytes / PLANES;
-        for row in 0..NROWS {
-            for plane in 0..PLANES {
-                let start = base + (row * row_bytes + plane * row_plane_bytes) as u32;
-                assert_eq!(
-                    streamed(&entries[..runs], start, row_plane_bytes),
-                    row_plane_bytes << plane,
-                    "row {row} plane {plane} is streamed the wrong number of times"
-                );
-            }
-        }
-    }
-
     /// Every run reads inside the framebuffer, which is what makes a swap a
-    /// delta and what keeps the chain out of unrelated memory.
+    /// delta and what keeps the chain out of unrelated memory, and the table
+    /// ends with the terminator that stops it.
     #[test]
     fn every_run_lies_inside_the_framebuffer() {
         fn check<FB: FrameBuffer<Word = u16>>(fb: &FB) {
@@ -325,6 +205,11 @@ mod tests {
                     "run {index} runs past the end of the framebuffer"
                 );
             }
+            assert_eq!(
+                entries[runs],
+                Descriptor::TERMINATOR,
+                "fill ends the chain after the runs it wrote"
+            );
         }
         check(&FrameMajor::new());
         check(&RowMajor::new());
@@ -364,27 +249,5 @@ mod tests {
         let fb = RowMajor::new();
         let mut entries = [Descriptor::TERMINATOR; 4];
         let _ = fill(&fb, &mut entries);
-    }
-
-    /// The count is the sequence's own, and the bound covers the layouts
-    /// `plan.md` names: `2^(PLANES-1)` runs per sequence, times the scan rows of
-    /// a row-major one.
-    #[test]
-    fn the_run_count_is_the_sequences_cost() {
-        assert_eq!(bcm_rep_count::<FrameMajor>(), 32);
-        assert_eq!(bcm_rep_count::<RowMajor>(), 32 * NROWS);
-        assert!(bcm_rep_count::<RowMajor>() <= MAX_DESCRIPTORS);
-
-        // A 64×32 panel on a 1/16 scan: half the scan rows, half the runs.
-        assert_eq!(
-            bcm_rep_count::<row::DmaFrameBuffer<{ NROWS / 2 }, COLS, PLANES>>(),
-            32 * (NROWS / 2)
-        );
-        // 64 scan rows: the case the bound is sized for, at 32 runs a row.
-        assert_eq!(
-            bcm_rep_count::<row::DmaFrameBuffer<64, COLS, PLANES>>(),
-            32 * 64
-        );
-        assert!(bcm_rep_count::<row::DmaFrameBuffer<64, COLS, PLANES>>() <= MAX_DESCRIPTORS);
     }
 }

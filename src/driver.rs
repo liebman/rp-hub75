@@ -135,6 +135,12 @@ fn divider_for(system_clock_hz: u32, panel_clock_hz: u32) -> u32 {
     system_clock_hz.div_ceil(word_clock_hz)
 }
 
+/// Panel shift clock a divider achieves: the system clock divided by the divider
+/// and the cycles one word takes.
+fn achieved_clock(system_clock_hz: u32, divider: u32) -> u32 {
+    system_clock_hz / divider / CYCLES_PER_WORD
+}
+
 /// Pins a [`Hub75Pins`] holds: the fourteen of the HUB75 bus.
 pub const PIN_COUNT: usize = pins::WORD_PINS as usize;
 
@@ -621,7 +627,7 @@ fn bring_up(
     );
     let divider = divider as u16;
     let achieved =
-        Rate::<u32, 1, 1>::from_raw(system_clock.to_Hz() / divider as u32 / CYCLES_PER_WORD);
+        Rate::<u32, 1, 1>::from_raw(achieved_clock(system_clock.to_Hz(), divider as u32));
 
     let (mut pio, sm0, _, _, _) = pio.split(resets);
 
@@ -1016,7 +1022,7 @@ impl<FB: 'static> Hub75Swap<FB> {
 
 #[cfg(test)]
 mod tests {
-    use super::CYCLES_PER_WORD;
+    use super::achieved_clock;
     use super::divider_for;
 
     /// The divider is a ceiling, not a rounding of the request to nearest.
@@ -1045,7 +1051,7 @@ mod tests {
             1_000_000, 9_375_000, 10_000_000, 18_750_000, 20_000_000, 37_500_000, 75_000_000,
         ] {
             let divider = divider_for(SYSTEM_CLOCK, request);
-            let achieved = SYSTEM_CLOCK / divider / CYCLES_PER_WORD;
+            let achieved = achieved_clock(SYSTEM_CLOCK, divider);
             assert!(
                 achieved <= request,
                 "asked for {request} Hz, the panel would run at {achieved} Hz"

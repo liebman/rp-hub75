@@ -46,8 +46,7 @@ startup, is open work — see `plan.md`.
 |---|---|
 | `src/driver.rs` | `Hub75`, `Hub75Config`, `Hub75Pins`, `Hub75Swap`, `on_dma_irq` |
 | `src/descriptor.rs` | the engine: the frame as a descriptor table a control channel plays into the data channel's `AL3` block |
-| `src/programs.rs` | the PIO program, the word↔pin layout, the panel model tests |
-| `src/color.rs` | `level`, `grey`, `gamma_step` for a `BIT_DEPTH`-bit panel |
+| `src/programs.rs` | the PIO stream program and the word↔pin layout |
 | `src/pins.rs` | the reference wiring: the Interstate 75 W pin map (GP0–GP13) |
 | `examples/` | `gradient`, `telemetry`, `ghost`, `ladder` — every example goes through `Hub75` |
 | `NOTES.md` | measurements, datasheet facts, and the reasoning: the design record |
@@ -78,10 +77,15 @@ lines: each one is shaped around the bare-metal target.
 
 There is no CI and no `.github/`. Whatever a change claims is verified, you ran.
 
-Hardware is the only judge of the panel. Host tests cover the target-independent
-parts — the PIO bit accounting, the engine's weights and run counts, the colour
-math. A change to the panel path in `src/programs.rs` or `src/driver.rs` is
-unverified until it is flashed; say so rather than implying otherwise.
+Hardware is the only judge of the panel. Host tests cover only what a file can be
+wrong about by itself — the clock divider, and the descriptor table `fill` and
+`patch` write. There are no tests for the stream program or for the drawing
+convention the examples use: the program is two PIO instructions, and the emulator
+that used to step it supplied its own state-machine configuration, so it could not
+have caught a driver that configured the machine differently; the colour
+arithmetic now lives in bare-metal examples, which cannot be host-tested at all.
+A change to the panel path in `src/programs.rs` or `src/driver.rs` is unverified
+until it is flashed; say so rather than implying otherwise.
 
 ### Logging
 
