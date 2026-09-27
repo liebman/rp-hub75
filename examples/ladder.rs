@@ -46,7 +46,6 @@ use hub75_framebuffer::compute_rows;
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;
 use rp_hub75::Hub75Pins;
-use rp_hub75::XTAL_FREQ_HZ;
 use rp_hub75::hub75_descriptors;
 
 /// The engine's one interrupt: apply a swap, and set the next frame going.
@@ -106,6 +105,12 @@ const RUNGS: [&str; 5] = [
 
 /// How long one rung is held, as in the M3 ladder.
 const RUNG_MS: u64 = 2_000;
+
+/// Crystal frequency on the Interstate 75 W, in Hz.
+///
+/// The reference board fits a 12 MHz crystal, and the PLLs are configured from
+/// it.
+const XTAL_FREQ_HZ: u32 = 12_000_000;
 
 /// The panel clock, as in the other examples: 10 MHz by default, 20 MHz with the
 /// `20mhz` feature.

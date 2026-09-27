@@ -125,7 +125,3 @@ pub use hub75_framebuffer as framebuffer;
 ///
 /// Re-exported so that macro can name it from a downstream crate.
 pub use static_cell;
-
-/// Crystal frequency on the Interstate 75 W, in Hz. Used when configuring
-/// the PLLs.
-pub const XTAL_FREQ_HZ: u32 = 12_000_000;

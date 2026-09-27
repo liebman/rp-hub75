@@ -49,7 +49,6 @@ use hub75_framebuffer::compute_rows;
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;
 use rp_hub75::Hub75Pins;
-use rp_hub75::XTAL_FREQ_HZ;
 use rp_hub75::hub75_descriptors;
 
 /// The interrupt that walks the framebuffer's BCM sequence (see `ghost`).
@@ -120,6 +119,12 @@ const COUNTER_MS: u64 = 100;
 /// The counter's range, as in the esp demo: five digits, which beside its label
 /// still fits inside the panel's 64 pixels.
 const COUNTER_MAX: u32 = 99_999;
+
+/// Crystal frequency on the Interstate 75 W, in Hz.
+///
+/// The reference board fits a 12 MHz crystal, and the PLLs are configured from
+/// it.
+const XTAL_FREQ_HZ: u32 = 12_000_000;
 
 /// The panel clock, as in the esp-hub75 examples: 10 MHz by default, 20 MHz with
 /// the `20mhz` feature.

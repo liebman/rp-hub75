@@ -52,7 +52,6 @@ use hub75_framebuffer::compute_rows;
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;
 use rp_hub75::Hub75Pins;
-use rp_hub75::XTAL_FREQ_HZ;
 use rp_hub75::hub75_descriptors;
 
 /// Tell the Boot ROM about our application.
@@ -141,6 +140,12 @@ fn block_on<F: Future>(future: F) -> F::Output {
         core::hint::spin_loop();
     }
 }
+
+/// Crystal frequency on the Interstate 75 W, in Hz.
+///
+/// The reference board fits a 12 MHz crystal, and the PLLs are configured from
+/// it.
+const XTAL_FREQ_HZ: u32 = 12_000_000;
 
 /// The panel clock, as in the esp-hub75 examples: 10 MHz by default, 20 MHz with
 /// the `20mhz` feature.
