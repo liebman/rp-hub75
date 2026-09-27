@@ -13,18 +13,20 @@
 //! fields are already in pin order, which is what the `interstate75` feature of
 //! `hub75-framebuffer` arranges:
 //!
-//! | word bits | pins | signal |
+//! | word bits | window pins | signal |
 //! |---|---|---|
-//! | 0-2 | GP0-2 | `R0 G0 B0` |
-//! | 3-5 | GP3-5 | `R1 G1 B1` |
-//! | 6-10 | GP6-10 | `A B C D E` |
-//! | 11 | GP11 | `CLK`, reserved and always zero — the PIO drives it |
-//! | 12 | GP12 | `STB`, the latch |
-//! | 13 | GP13 | `OE`, active low |
+//! | 0-2 | 0-2 | `R0 G0 B0` |
+//! | 3-5 | 3-5 | `R1 G1 B1` |
+//! | 6-10 | 6-10 | `A B C D E` |
+//! | 11 | 11 | `CLK`, reserved and always zero — the PIO drives it |
+//! | 12 | 12 | `STB`, the latch |
+//! | 13 | 13 | `OE`, active low |
 //!
-//! Bit *n* is pin *n* across the whole bus, so one `out pins, 14` puts a whole
-//! word on the pins, and the only thing left for the PIO to *generate* rather
-//! than copy out of the word is the clock.
+//! Bit *n* is pin *n* of the window, so one `out pins, 14` puts a whole word on
+//! the pins, and the only thing left for the PIO to *generate* rather than copy
+//! out of the word is the clock. The window's first pin is the base
+//! [`crate::Hub75Pins`] derives, so this one table describes any run of fourteen
+//! GPIOs; [`crate::pins`] names the offsets, which are also the word bits.
 //!
 //! # The program: two cycles per word, one word per column
 //!
@@ -70,7 +72,8 @@
 //! performed by that state machine on the same cycle, the side-set takes
 //! precedence in the overlapping region"* — so the corruption of that pin would be
 //! silent rather than an error. The window is one bit on the clock by construction:
-//! `.side_set 1` against `side_set_pin_base(pins::CLK)` in [`crate::driver`].
+//! `.side_set 1` against `side_set_pin_base(base + pins::CLK)` in
+//! [`crate::driver`].
 //!
 //! # The latch
 //!
@@ -118,11 +121,13 @@ pub const PULL_THRESHOLD: u8 = pins::WORD_PINS;
 pub const CYCLES_PER_WORD: u32 = 2;
 
 /// The stream program: one framebuffer word per panel column, straight out to
-/// GP0-13, with the panel clock on GP11.
+/// the fourteen pins of the HUB75 window, with the panel clock on the window's
+/// [`pins::CLK`] pin.
 ///
-/// Configure the state machine with `out_pins(WORD_BASE, WORD_PINS)`,
-/// `side_set_pin_base(CLK)`, `autopull(true)`, `pull_threshold(PULL_THRESHOLD)`
-/// and `out_shift_direction(ShiftDirection::Right)` — the words are handed out
+/// Configure the state machine with `out_pins(base, WORD_PINS)`,
+/// `side_set_pin_base(base + pins::CLK)`, `autopull(true)`,
+/// `pull_threshold(PULL_THRESHOLD)` and
+/// `out_shift_direction(ShiftDirection::Right)` — the words are handed out
 /// least-significant bit first, and `Left` reverses every word, which turns the
 /// picture into noise. Then `set_pindirs` all fourteen pins as outputs.
 ///

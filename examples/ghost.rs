@@ -50,11 +50,13 @@ use hal::dma::DMAExt;
 use hal::fugit::Rate;
 use hal::gpio::Pins;
 use hub75_framebuffer::bitplane::plain::DmaFrameBuffer;
+use hub75_framebuffer::compute_rows;
 
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;
 use rp_hub75::Hub75Pins;
-use rp_hub75::{BIT_DEPTH, PANEL_WIDTH, ROW_PAIRS, XTAL_FREQ_HZ};
+use rp_hub75::XTAL_FREQ_HZ;
+use rp_hub75::hub75_descriptors;
 
 /// The interrupt that walks the framebuffer's BCM sequence (see `gradient`).
 #[unsafe(no_mangle)]
@@ -67,9 +69,18 @@ extern "C" fn DMA_IRQ_1() {
 #[used]
 pub static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
 
-const NROWS: usize = ROW_PAIRS;
-const WORDS_PER_ROW: usize = PANEL_WIDTH;
-const PLANES: usize = BIT_DEPTH as usize;
+/// The panel this example is wired to: 64×64, 1/32 scan.
+///
+/// This is the whole panel description. Change these for a different panel and
+/// the framebuffer type below follows from them.
+const PANEL_WIDTH: usize = 64;
+const PANEL_HEIGHT: usize = 64;
+
+/// Row pairs: a 1/32-scan panel lights its top half and its bottom half at once.
+const NROWS: usize = compute_rows(PANEL_HEIGHT);
+
+/// Six planes: 63 panel scans a frame, where eight flickers. See the crate docs.
+const PLANES: usize = 6;
 
 /// The framebuffer type this example uses: `hub75-framebuffer`'s plane-major
 /// layout, whose words are the panel's own pin levels.
@@ -77,7 +88,7 @@ const PLANES: usize = BIT_DEPTH as usize;
 /// The two of them are plain statics, and that costs nothing: the engine names
 /// each run's address in the descriptor table, so neither a framebuffer's address
 /// nor its alignment changes the picture or the interrupt load.
-type Fb = DmaFrameBuffer<NROWS, WORDS_PER_ROW, PLANES>;
+type Fb = DmaFrameBuffer<NROWS, PANEL_WIDTH, PLANES>;
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
 ///
@@ -96,9 +107,9 @@ macro_rules! mk_static {
 /// Steps each phase takes, at [`STEP_MS`] apiece.
 const DOT_STEPS: u32 = 20;
 const RASTER_STEPS: u32 = PANEL_WIDTH as u32;
-/// `ROW_PAIRS` steps down the panel, then a dwell on the last row and another on
+/// `NROWS` steps down the panel, then a dwell on the last row and another on
 /// the first: the two moments a frame-boundary leak would show.
-const SWEEP_STEPS: u32 = ROW_PAIRS as u32 + 8;
+const SWEEP_STEPS: u32 = NROWS as u32 + 8;
 /// Milliseconds one step is held: slow enough to watch, quick enough to cycle.
 const STEP_MS: u64 = 80;
 /// The row pair the raster phase moves along — a middle one, away from the edges.
@@ -106,10 +117,10 @@ const RASTER_ROW: u32 = 8;
 
 /// The row pair a sweeping phase is on, dwelling at both ends of the panel.
 fn sweep_row(step: u32) -> u32 {
-    let last = ROW_PAIRS as u32 - 1;
-    if step < ROW_PAIRS as u32 {
+    let last = NROWS as u32 - 1;
+    if step < NROWS as u32 {
         step
-    } else if step < ROW_PAIRS as u32 + 4 {
+    } else if step < NROWS as u32 + 4 {
         last
     } else {
         0
@@ -183,6 +194,7 @@ fn main() -> ! {
         // rate: if a phase shows horizontal bleed, halve this and look again.
         Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock(PANEL_CLOCK),
         fb0,
+        hub75_descriptors!(Fb),
     )
     .expect("failed to start the panel");
 
@@ -222,7 +234,7 @@ fn draw(fb: &mut Fb, phase: u32, step: u32) {
     fb.erase();
     // All planes on: the brightest thing the panel can show, so that whatever
     // does leak has the most light to leak with. The crate keeps the top
-    // `BIT_DEPTH` bits of a drawn byte, so 255 is light level 63 — the top of the
+    // `PLANES` bits of a drawn byte, so 255 is light level 63 — the top of the
     // panel's range — and this is the same light `252` would be.
     let on = Rgb888::WHITE;
 

@@ -47,21 +47,31 @@ use hal::dma::DMAExt;
 use hal::fugit::Rate;
 use hal::gpio::Pins;
 use hub75_framebuffer::bitplane::plain::DmaFrameBuffer;
+use hub75_framebuffer::compute_rows;
 
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;
 use rp_hub75::Hub75Pins;
-use rp_hub75::{BIT_DEPTH, PANEL_HEIGHT, PANEL_WIDTH, ROW_PAIRS, XTAL_FREQ_HZ};
+use rp_hub75::XTAL_FREQ_HZ;
+use rp_hub75::hub75_descriptors;
 
 /// Tell the Boot ROM about our application.
 #[unsafe(link_section = ".start_block")]
 #[used]
 pub static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
 
-/// The panel geometry the framebuffers are built for.
-const NROWS: usize = ROW_PAIRS;
-const WORDS_PER_ROW: usize = PANEL_WIDTH;
-const PLANES: usize = BIT_DEPTH as usize;
+/// The panel this example is wired to: 64×64, 1/32 scan.
+///
+/// This is the whole panel description. Change these for a different panel and
+/// the framebuffer type below follows from them.
+const PANEL_WIDTH: usize = 64;
+const PANEL_HEIGHT: usize = 64;
+
+/// Row pairs: a 1/32-scan panel lights its top half and its bottom half at once.
+const NROWS: usize = compute_rows(PANEL_HEIGHT);
+
+/// The BCM depth. Six planes: 63 panel scans a frame, where eight flickers.
+const PLANES: usize = 6;
 
 /// The framebuffer type this example uses: `hub75-framebuffer`'s plane-major
 /// layout, whose words are the panel's own pin levels.
@@ -69,7 +79,7 @@ const PLANES: usize = BIT_DEPTH as usize;
 /// The two of them are plain statics, and that costs nothing: the engine names
 /// each run's address in the descriptor table, so neither a framebuffer's address
 /// nor its alignment changes the picture or the interrupt load.
-type Fb = DmaFrameBuffer<NROWS, WORDS_PER_ROW, PLANES>;
+type Fb = DmaFrameBuffer<NROWS, PANEL_WIDTH, PLANES>;
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
 ///
@@ -201,6 +211,7 @@ fn main() -> ! {
         clocks.system_clock.freq(),
         Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock(PANEL_CLOCK),
         fb0,
+        hub75_descriptors!(Fb),
     )
     .expect("failed to start the panel");
 
@@ -214,7 +225,7 @@ fn main() -> ! {
          runs a refresh, one interrupt a frame",
         PANEL_WIDTH,
         PANEL_HEIGHT,
-        BIT_DEPTH,
+        PLANES,
         hub75.divider(),
         hub75.panel_clock().to_Hz(),
         hub75.refresh_hz(),
@@ -271,11 +282,11 @@ fn main() -> ! {
 fn draw(fb: &mut Fb, frames: u32) {
     fb.erase();
     let width = PANEL_WIDTH as u32;
-    // The crate keeps the top `BIT_DEPTH` bits of a drawn byte, so a light level
+    // The crate keeps the top `PLANES` bits of a drawn byte, so a light level
     // has to be shifted up to the top of the byte before it is drawn: level
-    // `last` is full scale, and the bits below `8 - BIT_DEPTH` are dropped.
-    let last = (1u32 << BIT_DEPTH) - 1;
-    let shift = 8 - BIT_DEPTH as u32;
+    // `last` is full scale, and the bits below `8 - PLANES` are dropped.
+    let last = (1u32 << PLANES) - 1;
+    let shift = 8 - PLANES as u32;
     for row in 0..PANEL_HEIGHT as i32 {
         for column in 0..PANEL_WIDTH as i32 {
             let value = ((column as u32 * last / (width - 1)) << shift) as u8;

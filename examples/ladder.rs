@@ -41,11 +41,13 @@ use hal::dma::DMAExt;
 use hal::fugit::Rate;
 use hal::gpio::Pins;
 use hub75_framebuffer::bitplane::plain::DmaFrameBuffer;
+use hub75_framebuffer::compute_rows;
 
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;
 use rp_hub75::Hub75Pins;
-use rp_hub75::{BIT_DEPTH, PANEL_HEIGHT, PANEL_WIDTH, ROW_PAIRS, XTAL_FREQ_HZ};
+use rp_hub75::XTAL_FREQ_HZ;
+use rp_hub75::hub75_descriptors;
 
 /// The engine's one interrupt: apply a swap, and set the next frame going.
 #[unsafe(no_mangle)]
@@ -58,9 +60,18 @@ extern "C" fn DMA_IRQ_1() {
 #[used]
 pub static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
 
-const NROWS: usize = ROW_PAIRS;
-const WORDS_PER_ROW: usize = PANEL_WIDTH;
-const PLANES: usize = BIT_DEPTH as usize;
+/// The panel this example is wired to: 64×64, 1/32 scan.
+///
+/// This is the whole panel description. Change these for a different panel and
+/// the framebuffer type below follows from them.
+const PANEL_WIDTH: usize = 64;
+const PANEL_HEIGHT: usize = 64;
+
+/// Row pairs: a 1/32-scan panel lights its top half and its bottom half at once.
+const NROWS: usize = compute_rows(PANEL_HEIGHT);
+
+/// Six planes: 63 panel scans a frame, where eight flickers. See the crate docs.
+const PLANES: usize = 6;
 
 /// The framebuffer type this example uses: `hub75-framebuffer`'s plane-major
 /// layout, whose words are the panel's own pin levels.
@@ -68,7 +79,7 @@ const PLANES: usize = BIT_DEPTH as usize;
 /// The two of them are plain statics, and that costs nothing: the engine names
 /// each run's address in the descriptor table, so neither a framebuffer's address
 /// nor its alignment changes the picture or the interrupt load.
-type Fb = DmaFrameBuffer<NROWS, WORDS_PER_ROW, PLANES>;
+type Fb = DmaFrameBuffer<NROWS, PANEL_WIDTH, PLANES>;
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
 ///
@@ -163,6 +174,7 @@ fn main() -> ! {
         // tears or smears only as the clock rises is the ribbon's ceiling.
         Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock(PANEL_CLOCK),
         fb0,
+        hub75_descriptors!(Fb),
     )
     .expect("failed to start the panel");
 
@@ -190,7 +202,7 @@ fn main() -> ! {
 
 /// Draws one rung. See the module docs for what each pattern is for.
 ///
-/// Every colour is full intensity: the crate keeps the top `BIT_DEPTH` bits of a
+/// Every colour is full intensity: the crate keeps the top `PLANES` bits of a
 /// drawn byte, so 255 is light level 63, the top of the panel's range. No rung is
 /// a brightness test — `gradient` is.
 fn draw(fb: &mut Fb, rung: usize) {

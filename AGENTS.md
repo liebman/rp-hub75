@@ -32,22 +32,40 @@ to another board is therefore a *base pin* plus the same bus order —
 `R0 G0 B0 R1 G1 B1 A B C D E CLK STB OE`. Keep GP0–GP13 as the default and as the
 reference wiring, but do not let new code assume it.
 
-Status: the timing paths are board-independent already; the pin selection is not.
-`Hub75Pins::new` takes concrete `Pin<Gpio0, …>` … `Pin<Gpio13, …>` arguments, and
-`src/driver.rs` programs `out_pins(pins::WORD_BASE, …)` and
-`side_set_pin_base(pins::CLK)`. A different consecutive run is an edit to
-`src/pins.rs` and the constructor today, not a parameter. Making the base a
-constructor argument, with the fourteen pins checked for consecutiveness at
-startup, is open work — see `plan.md`.
+Status: the pin selection is a parameter. `Hub75Pins::new` takes the fourteen
+pins as any GPIOs the PIO can drive — fourteen `PinId`s and a `PioPin` bound, not
+`Gpio0`–`Gpio13` — derives the base from the first pin, and checks at startup that
+they are consecutive and ascending (a wiring mistake stops startup rather than
+driving the wrong pins, since a runtime pin number cannot be checked by the type
+system). `src/driver.rs` programs `out_pins(pins.base(), …)` and
+`side_set_pin_base(pins.base() + pins::CLK)`; `src/pins.rs` holds signal
+*offsets* in bus order rather than absolute GPIO numbers, and `MAX_WORD_BASE` is
+the highest base a fourteen-pin window can have (`SM_PINCTRL`'s `OUT_BASE` and
+`SIDESET_BASE` are five-bit fields, so the PIO addresses pins 0–31). The signal
+*order* is still the `interstate75` feature of `hub75-framebuffer`, which is
+per-board; base and order are independent axes.
+
+GP0–GP13 is the reference wiring and the examples' default. The base is 0 there,
+so nothing about the reference board changed; a non-zero base is exercised in M6.
+
+### A board is not a panel
+
+The Interstate 75 W is a HUB75 **header**: the panel plugged into it is the
+application's choice, so no panel is a property of the crate and a module named
+after a board must not grow one. Panel geometry belongs to the framebuffer type
+(`DmaFrameBuffer<NROWS, COLS, PLANES>`), and the **examples** state the panel they
+are wired to (`PANEL_WIDTH`, `PANEL_HEIGHT`, `compute_rows`, `PLANES`) and let the
+type follow. The library holds no panel constants. What is the board's is the pin
+window, the signal order, and the crystal.
 
 ## Layout
 
 | path | what |
 |---|---|
-| `src/driver.rs` | `Hub75`, `Hub75Config`, `Hub75Pins`, `Hub75Swap`, `on_dma_irq` |
+| `src/driver.rs` | `Hub75`, `Hub75Config`, `Hub75Pins`, `Hub75Swap`, `PioPin`, `on_dma_irq` |
 | `src/descriptor.rs` | the engine: the frame as a descriptor table a control channel plays into the data channel's `AL3` block |
 | `src/programs.rs` | the PIO stream program and the word↔pin layout |
-| `src/pins.rs` | the reference wiring: the Interstate 75 W pin map (GP0–GP13) |
+| `src/pins.rs` | the HUB75 signals as offsets in bus order, and the reference wiring's other pins |
 | `examples/` | `gradient`, `telemetry`, `ghost`, `ladder` — every example goes through `Hub75` |
 | `NOTES.md` | measurements, datasheet facts, and the reasoning: the design record |
 | `plan.md` | milestones: what is done, in progress, and next |

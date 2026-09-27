@@ -81,6 +81,10 @@ rp235x-hal = { version = "0.4.0", features = [
     "critical-section-impl",
     "rt",
 ] }
+# The descriptor table is the caller's storage, and `hub75_descriptors!` puts it
+# in a `StaticCell`. A dependency rather than a dev-dependency: the macro names
+# it from downstream crates, through the crate root's re-export.
+static_cell = "2.1"
 
 [dev-dependencies]
 cortex-m = "0.7"
@@ -99,9 +103,6 @@ embedded-hal = "1.0"
 # A panic prints its message and location over RTT, then halts. (No default
 # features, so `print-defmt` has to be asked for.)
 panic-probe = { version = "1", features = ["print-defmt"] }
-# The examples reach their framebuffers through `StaticCell` (see `mk_static!`),
-# so a swap can hand a `'static mut` framebuffer back and forth without `unsafe`.
-static_cell = "2.1"
 
 [profile.dev]
 debug = true

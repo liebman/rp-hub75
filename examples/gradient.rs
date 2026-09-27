@@ -44,11 +44,13 @@ use hal::dma::DMAExt;
 use hal::fugit::Rate;
 use hal::gpio::Pins;
 use hub75_framebuffer::bitplane::plain::DmaFrameBuffer;
+use hub75_framebuffer::compute_rows;
 
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;
 use rp_hub75::Hub75Pins;
-use rp_hub75::{BIT_DEPTH, PANEL_HEIGHT, PANEL_WIDTH, ROW_PAIRS, XTAL_FREQ_HZ};
+use rp_hub75::XTAL_FREQ_HZ;
+use rp_hub75::hub75_descriptors;
 
 /// The interrupt that walks the framebuffer's BCM sequence (see `ghost`).
 #[unsafe(no_mangle)]
@@ -61,9 +63,18 @@ extern "C" fn DMA_IRQ_1() {
 #[used]
 pub static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
 
-const NROWS: usize = ROW_PAIRS;
-const WORDS_PER_ROW: usize = PANEL_WIDTH;
-const PLANES: usize = BIT_DEPTH as usize;
+/// The panel this example is wired to: 64×64, 1/32 scan.
+///
+/// This is the whole panel description. Change these for a different panel and
+/// the framebuffer type below follows from them.
+const PANEL_WIDTH: usize = 64;
+const PANEL_HEIGHT: usize = 64;
+
+/// Row pairs: a 1/32-scan panel lights its top half and its bottom half at once.
+const NROWS: usize = compute_rows(PANEL_HEIGHT);
+
+/// Six planes: 63 panel scans a frame, where eight flickers. See the crate docs.
+const PLANES: usize = 6;
 
 /// The framebuffer type this example uses: `hub75-framebuffer`'s plane-major
 /// layout, whose words are the panel's own pin levels.
@@ -71,7 +82,7 @@ const PLANES: usize = BIT_DEPTH as usize;
 /// The two of them are plain statics, and that costs nothing: the engine names
 /// each run's address in the descriptor table, so neither a framebuffer's address
 /// nor its alignment changes the picture or the interrupt load.
-type Fb = DmaFrameBuffer<NROWS, WORDS_PER_ROW, PLANES>;
+type Fb = DmaFrameBuffer<NROWS, PANEL_WIDTH, PLANES>;
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
 ///
@@ -100,7 +111,7 @@ const LINE0: i32 = PANEL_HEIGHT as i32 - 1 - 21;
 const LINE1: i32 = PANEL_HEIGHT as i32 - 1 - 14;
 const LINE2: i32 = PANEL_HEIGHT as i32 - 1 - 7;
 const LINE3: i32 = PANEL_HEIGHT as i32 - 1;
-/// One ramp step per column. The crate keeps the top `BIT_DEPTH` bits of an 8-bit
+/// One ramp step per column. The crate keeps the top `PLANES` bits of an 8-bit
 /// channel, so `x * (256 / PANEL_WIDTH)` is exactly light level `x` at depth 6 —
 /// the ramps are linear in light, which is what makes them a BCM check.
 const STEP: u8 = (256 / PANEL_WIDTH) as u8;
@@ -175,6 +186,7 @@ fn main() -> ! {
         clocks.system_clock.freq(),
         Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock(PANEL_CLOCK),
         fb0,
+        hub75_descriptors!(Fb),
     )
     .expect("failed to start the panel");
 

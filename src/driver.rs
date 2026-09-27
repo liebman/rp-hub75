@@ -91,11 +91,11 @@ use hal::pio::PIOExt;
 use hal::pio::PinDir;
 use hal::pio::ShiftDirection;
 use hub75_framebuffer::FrameBuffer;
-use hub75_framebuffer::bcm_rep_count;
 
 use crate::descriptor::DESCRIPTOR_WORDS;
 use crate::descriptor::Descriptor;
-use crate::descriptor::MAX_DESCRIPTORS;
+use crate::descriptor::Hub75Descriptors;
+use crate::descriptor::descriptor_count;
 use crate::pins;
 use crate::programs::PULL_THRESHOLD;
 use crate::programs::hub75_stream;
@@ -143,6 +143,46 @@ fn achieved_clock(system_clock_hz: u32, divider: u32) -> u32 {
 
 /// Pins a [`Hub75Pins`] holds: the fourteen of the HUB75 bus.
 pub const PIN_COUNT: usize = pins::WORD_PINS as usize;
+
+/// A GPIO the PIO can drive.
+///
+/// [`Hub75Pins::new`] takes the fourteen bus pins as concrete types, so this
+/// bound is what makes handing over a pin the PIO cannot reach a compile error.
+/// The pins' GPIO *numbers* are checked at startup instead: they must be
+/// consecutive and ascending, and the whole window must fit the PIO's pin fields.
+pub trait PioPin: hal::gpio::PinId + hal::gpio::ValidFunction<FunctionPio0> {}
+
+impl<P> PioPin for P where P: hal::gpio::PinId + hal::gpio::ValidFunction<FunctionPio0> {}
+
+/// Checks that a bus-order pin list is a window the PIO can drive.
+///
+/// A HUB75 bus is fourteen consecutive GPIOs, ascending in bus order, and that
+/// window is what `out pins, 14` writes: pin *n* of the window is `base + n`, so
+/// the base is the first pin. Anything else would drive the wrong pins, which is
+/// a wiring mistake rather than a dark panel, so it stops startup.
+///
+/// # Panics
+///
+/// Panics if the pins are not consecutive and ascending in the order given, or
+/// if the window does not fit the PIO's five-bit pin fields — a base above
+/// [`pins::MAX_WORD_BASE`].
+fn check_pin_window(numbers: &[u8; PIN_COUNT]) {
+    let base = numbers[0];
+    for (offset, &number) in numbers.iter().enumerate() {
+        assert_eq!(
+            usize::from(number),
+            usize::from(base) + offset,
+            "{number} is not pin {offset} of the window starting at {base}: \
+             the HUB75 pins must be consecutive and ascending in bus order"
+        );
+    }
+    assert!(
+        base <= pins::MAX_WORD_BASE,
+        "a {PIN_COUNT}-pin window cannot start at {base}: the PIO's pin fields \
+         are five bits, so it must start at {} or lower",
+        pins::MAX_WORD_BASE
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -221,12 +261,13 @@ pub enum Hub75Error {
 
 /// The fourteen HUB75 pins, converted and owned by the driver.
 ///
-/// The constructor takes the concrete `Pin<GpioN, …>` types, so handing over
-/// the wrong pin number is a compile error rather than a dark panel, and the
-/// handles are kept so nothing else can claim the bus. `Pins::new` yields pins
-/// in `FunctionNull`; this does the `into_function` step.
+/// The constructor takes them in bus order — `R0 G0 B0 R1 G1 B1 A B C D E CLK
+/// STB OE` — so the order is the signature, and it checks that they are fourteen
+/// consecutive GPIOs ascending in that order. The handles are kept so nothing
+/// else can claim the bus. `Pins::new` yields pins in `FunctionNull`; this does
+/// the `into_function` step.
 pub struct Hub75Pins {
-    /// GP0-13 in bus order: `R0 G0 B0 R1 G1 B1 A B C D E CLK STB OE`.
+    /// The window's fourteen pins, in bus order.
     hold: [hal::gpio::Pin<DynPinId, FunctionPio0, PullNone>; PIN_COUNT],
 }
 
@@ -234,56 +275,79 @@ impl Hub75Pins {
     /// Converts the panel's fourteen pins to an owned pin set.
     ///
     /// The order is the HUB75 bus: top half (`R0 G0 B0`), bottom half
-    /// (`R1 G1 B1`), row address (`A B C D E`), then `CLK STB OE`. It is
-    /// [`crate::pins`] as a signature.
+    /// (`R1 G1 B1`), row address (`A B C D E`), then `CLK STB OE`. The pins must
+    /// be fourteen consecutive GPIOs ascending in that order; the first one is
+    /// the window's base, which [`base`](Self::base) reports. See [`crate::pins`]
+    /// for the offsets this order is made of.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the pins are not consecutive and ascending in the order given,
+    /// or if the window does not fit the PIO's five-bit pin fields.
     #[allow(clippy::too_many_arguments)]
-    pub fn new<P: PullType>(
-        r0: hal::gpio::Pin<hal::gpio::bank0::Gpio0, FunctionNull, P>,
-        g0: hal::gpio::Pin<hal::gpio::bank0::Gpio1, FunctionNull, P>,
-        b0: hal::gpio::Pin<hal::gpio::bank0::Gpio2, FunctionNull, P>,
-        r1: hal::gpio::Pin<hal::gpio::bank0::Gpio3, FunctionNull, P>,
-        g1: hal::gpio::Pin<hal::gpio::bank0::Gpio4, FunctionNull, P>,
-        b1: hal::gpio::Pin<hal::gpio::bank0::Gpio5, FunctionNull, P>,
-        a: hal::gpio::Pin<hal::gpio::bank0::Gpio6, FunctionNull, P>,
-        b: hal::gpio::Pin<hal::gpio::bank0::Gpio7, FunctionNull, P>,
-        c: hal::gpio::Pin<hal::gpio::bank0::Gpio8, FunctionNull, P>,
-        d: hal::gpio::Pin<hal::gpio::bank0::Gpio9, FunctionNull, P>,
-        e: hal::gpio::Pin<hal::gpio::bank0::Gpio10, FunctionNull, P>,
-        clk: hal::gpio::Pin<hal::gpio::bank0::Gpio11, FunctionNull, P>,
-        stb: hal::gpio::Pin<hal::gpio::bank0::Gpio12, FunctionNull, P>,
-        oe: hal::gpio::Pin<hal::gpio::bank0::Gpio13, FunctionNull, P>,
-    ) -> Self {
+    pub fn new<I0, I1, I2, I3, I4, I5, I6, I7, I8, I9, I10, I11, I12, I13, P>(
+        r0: hal::gpio::Pin<I0, FunctionNull, P>,
+        g0: hal::gpio::Pin<I1, FunctionNull, P>,
+        b0: hal::gpio::Pin<I2, FunctionNull, P>,
+        r1: hal::gpio::Pin<I3, FunctionNull, P>,
+        g1: hal::gpio::Pin<I4, FunctionNull, P>,
+        b1: hal::gpio::Pin<I5, FunctionNull, P>,
+        a: hal::gpio::Pin<I6, FunctionNull, P>,
+        b: hal::gpio::Pin<I7, FunctionNull, P>,
+        c: hal::gpio::Pin<I8, FunctionNull, P>,
+        d: hal::gpio::Pin<I9, FunctionNull, P>,
+        e: hal::gpio::Pin<I10, FunctionNull, P>,
+        clk: hal::gpio::Pin<I11, FunctionNull, P>,
+        stb: hal::gpio::Pin<I12, FunctionNull, P>,
+        oe: hal::gpio::Pin<I13, FunctionNull, P>,
+    ) -> Self
+    where
+        I0: PioPin,
+        I1: PioPin,
+        I2: PioPin,
+        I3: PioPin,
+        I4: PioPin,
+        I5: PioPin,
+        I6: PioPin,
+        I7: PioPin,
+        I8: PioPin,
+        I9: PioPin,
+        I10: PioPin,
+        I11: PioPin,
+        I12: PioPin,
+        I13: PioPin,
+        P: PullType,
+    {
         // The panel pins are outputs, so their pull setting is irrelevant; it is
         // normalized away so the driver does not need a type parameter for it.
-        fn hold<I, P>(
+        fn hold<I: PioPin, P: PullType>(
             pin: hal::gpio::Pin<I, FunctionNull, P>,
-        ) -> hal::gpio::Pin<DynPinId, FunctionPio0, PullNone>
-        where
-            I: hal::gpio::PinId + hal::gpio::ValidFunction<FunctionPio0>,
-            P: PullType,
-        {
+        ) -> hal::gpio::Pin<DynPinId, FunctionPio0, PullNone> {
             let pin: hal::gpio::Pin<I, FunctionPio0, PullNone> =
                 pin.into_pull_type::<PullNone>().into_function();
             pin.into_dyn_pin()
         }
-        Self {
-            hold: [
-                hold(r0),
-                hold(g0),
-                hold(b0),
-                hold(r1),
-                hold(g1),
-                hold(b1),
-                hold(a),
-                hold(b),
-                hold(c),
-                hold(d),
-                hold(e),
-                hold(clk),
-                hold(stb),
-                hold(oe),
-            ],
-        }
+        let hold = [
+            hold(r0),
+            hold(g0),
+            hold(b0),
+            hold(r1),
+            hold(g1),
+            hold(b1),
+            hold(a),
+            hold(b),
+            hold(c),
+            hold(d),
+            hold(e),
+            hold(clk),
+            hold(stb),
+            hold(oe),
+        ];
+        let numbers: [u8; PIN_COUNT] = core::array::from_fn(|index| hold[index].id().num);
+        // Checked here, so a mis-wired bus stops startup; [`base`](Self::base)
+        // reads the same first pin.
+        check_pin_window(&numbers);
+        Self { hold }
     }
 
     /// Inverts the clock pin's output in the GPIO block.
@@ -295,14 +359,18 @@ impl Hub75Pins {
     /// the clock.
     #[cfg(feature = "invert-clock")]
     fn invert_clock(&mut self) {
-        let index = (pins::CLK - pins::WORD_BASE) as usize;
-        debug_assert_eq!(self.hold[index].id().num, pins::CLK);
+        let index = pins::CLK as usize;
+        debug_assert_eq!(self.hold[index].id().num, self.base() + pins::CLK);
         self.hold[index].set_output_override(OutputOverride::Invert);
     }
 
-    /// The GPIO numbers held, in bus order (`pins::R0` … `pins::OE`).
-    pub fn numbers(&self) -> [u8; PIN_COUNT] {
-        core::array::from_fn(|index| self.hold[index].id().num)
+    /// The GPIO number the fourteen-pin window starts at.
+    ///
+    /// The first pin [`new`](Self::new) was given, which `out pins, 14` writes
+    /// through `base + 13`; the panel clock is the window's eleventh pin,
+    /// [`base`](Self::base) plus [`pins::CLK`].
+    pub fn base(&self) -> u8 {
+        self.hold[0].id().num
     }
 }
 
@@ -316,9 +384,15 @@ impl Hub75Pins {
 /// framebuffer's type, so the frame's table and the control channel's register
 /// addresses are captured at init and used afterwards.
 struct Engine {
-    /// One frame's runs and its terminator, played by the control channel.
-    table: [Descriptor; MAX_DESCRIPTORS + 1],
-    /// Runs in `table`, i.e. the index of the terminator. Zero means no driver.
+    /// The frame's runs and their terminator, played by the control channel.
+    ///
+    /// This points at the caller's [`Hub75Descriptors`], which outlives the
+    /// driver, rather than owning a table: the driver's own static stays a few
+    /// words instead of carrying storage sized for the largest layout.
+    table: *mut Descriptor,
+    /// Descriptors at `table`: the runs, plus the terminator.
+    table_len: usize,
+    /// Runs in the table, i.e. the index of the terminator. Zero means no driver.
     table_count: usize,
     /// The framebuffer being scanned.
     base: u32,
@@ -341,10 +415,11 @@ struct Engine {
 unsafe impl Send for Engine {}
 
 impl Engine {
-    /// Nothing running. A driver fills this in place, so the 16 KiB table never
-    /// passes through the stack.
+    /// Nothing running. The engine is a handful of words; the table itself is the
+    /// caller's storage, pointed at by `table`.
     const EMPTY: Self = Self {
-        table: [Descriptor::TERMINATOR; MAX_DESCRIPTORS + 1],
+        table: core::ptr::null_mut(),
+        table_len: 0,
         table_count: 0,
         base: 0,
         pending: None,
@@ -366,7 +441,13 @@ impl Engine {
         };
         self.base = self.base.wrapping_add(delta as u32);
         let count = self.table_count;
-        crate::descriptor::patch(&mut self.table, count, delta as u32);
+        let table_len = self.table_len;
+        // SAFETY: `table` is the caller's `Hub75Descriptors` storage, `'static`
+        // and handed to the driver at init, and `table_len` is its length. The
+        // driver holds the only reference to it, and this runs in the critical
+        // section the interrupt holds.
+        let table = unsafe { core::slice::from_raw_parts_mut(self.table, table_len) };
+        crate::descriptor::patch(table, count, delta as u32);
         SWAP_DONE.store(true, Ordering::Release);
         true
     }
@@ -384,7 +465,7 @@ impl Engine {
     /// The channel is halted at the terminator, so this is the store that begins
     /// the frame: the read address resumes at the table's first run.
     fn restart_chain(&mut self) {
-        let table = self.table.as_ptr() as u32;
+        let table = self.table as u32;
         let read_addr = self.control_read_addr;
         let trigger = self.control_trigger;
         // SAFETY: these are the control channel's own registers, captured at init
@@ -631,29 +712,10 @@ fn bring_up(
 
     let (mut pio, sm0, _, _, _) = pio.split(resets);
 
-    // The board's wiring, as the driver understands it. The constructor's
-    // signature already pins each argument to a GPIO number; this checks the
-    // order it means, against `pins.rs`, before anything is driven.
-    assert_eq!(
-        pins.numbers(),
-        [
-            pins::R0,
-            pins::G0,
-            pins::B0,
-            pins::R1,
-            pins::G1,
-            pins::B1,
-            pins::ROW_A,
-            pins::ROW_B,
-            pins::ROW_C,
-            pins::ROW_D,
-            pins::ROW_E,
-            pins::CLK,
-            pins::STB,
-            pins::OE,
-        ],
-        "Hub75Pins must be handed over in HUB75 bus order"
-    );
+    // The window the framebuffer words are shifted into. `Hub75Pins::new` has
+    // already checked that the fourteen pins are consecutive and ascending, so
+    // the base is simply the first pin and the clock sits `pins::CLK` above it.
+    let base = pins.base();
 
     // The clock's polarity is the pad's, so the pin is inverted before the
     // machine starts and the first clock level is already the idle one.
@@ -666,8 +728,8 @@ fn bring_up(
         .install(&hub75_stream())
         .expect("the stream program fits the instruction memory");
     let (mut sm, _, tx) = PIOBuilder::from_installed_program(program)
-        .out_pins(pins::WORD_BASE, pins::WORD_PINS)
-        .side_set_pin_base(pins::CLK)
+        .out_pins(base, pins::WORD_PINS)
+        .side_set_pin_base(base + pins::CLK)
         .clock_divisor_fixed_point(divider, 0)
         .out_shift_direction(ShiftDirection::Right)
         .autopull(true)
@@ -677,7 +739,7 @@ fn bring_up(
 
     // Every pin of the word is an output: the machine drives the whole bus,
     // clock included.
-    sm.set_pindirs((0..pins::WORD_PINS).map(|offset| (pins::WORD_BASE + offset, PinDir::Output)));
+    sm.set_pindirs((0..pins::WORD_PINS).map(|offset| (base + offset, PinDir::Output)));
     // Keep the machine running. The handle has no `Drop`, so dropping it here
     // would be safe; holding it documents who owns the machine.
     let _sm = sm.start();
@@ -725,12 +787,12 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
     ///
     /// # Panics
     ///
-    /// Panics if the frame needs more runs than [`MAX_DESCRIPTORS`], if a
-    /// framebuffer segment is empty (a zero-word run would end the frame early),
-    /// or if the framebuffer's BCM sequence is empty. All are properties of the
-    /// layout, and all are better discovered at startup than as a frozen panel.
+    /// Panics if a framebuffer segment is empty (a zero-word run would end the
+    /// frame early), or if the framebuffer's BCM sequence is empty. Both are
+    /// properties of the layout, and both are better discovered at startup than as
+    /// a frozen panel.
     #[allow(clippy::too_many_arguments)]
-    pub fn new<CH, CCH>(
+    pub fn new<CH, CCH, const N: usize>(
         pio: pac::PIO0,
         channel: CH,
         control: CCH,
@@ -739,6 +801,7 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
         system_clock: Rate<u32, 1, 1>,
         config: Hub75Config,
         fb: &'static mut FB,
+        descriptors: &'static mut Hub75Descriptors<FB, N>,
     ) -> Result<Self, Hub75Error>
     where
         CH: SingleChannel,
@@ -776,20 +839,19 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
             config.interrupt,
             irq_line,
             fb,
+            descriptors,
         ))
     }
 }
 
 impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
-    /// Materialises the frame in the table and starts it.
+    /// Materialises the frame in the caller's descriptor storage and starts it.
     ///
     /// Split out of [`new`](Self::new) so that one function does the peripheral
-    /// setup and this one the engine — and so that the 16 KiB table is filled in
-    /// place in the static rather than passed around. Init is the only writer of
-    /// the table until the interrupt is unmasked, and the interrupt is the only
-    /// writer afterwards.
+    /// setup and this one the engine. Init is the only writer of the table until
+    /// the interrupt is unmasked, and the interrupt is the only writer afterwards.
     #[allow(clippy::too_many_arguments)]
-    fn start(
+    fn start<const N: usize>(
         channel: &impl SingleChannel,
         control: &impl SingleChannel,
         pins: Hub75Pins,
@@ -798,13 +860,10 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
         interrupt: pac::Interrupt,
         irq_line: u8,
         fb: &'static mut FB,
+        descriptors: &'static mut Hub75Descriptors<FB, N>,
     ) -> Self {
-        let expected = bcm_rep_count::<FB>();
-        assert!(
-            expected <= MAX_DESCRIPTORS,
-            "{expected} run descriptors exceed descriptor::MAX_DESCRIPTORS \
-             ({MAX_DESCRIPTORS}); raise that constant for this layout"
-        );
+        // The runs, without the terminator that ends the chain.
+        let expected = descriptor_count::<FB>() - 1;
         let base = fb as *const FB as u32;
         let channel_id = channel.id();
 
@@ -828,11 +887,14 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
             engine.irq_line = irq_line;
             engine.control_read_addr = control_read_addr;
             engine.control_trigger = control_trigger;
-            let count = crate::descriptor::fill(fb, &mut engine.table);
+            let table = descriptors.entries();
+            engine.table = table.as_mut_ptr();
+            engine.table_len = table.len();
+            let count = crate::descriptor::fill(fb, table);
             engine.table_count = count;
             // The table *is* the frame, so the words a refresh streams are its
             // own counts: no second walk of the sequence.
-            let words = engine.table[..count]
+            let words = table[..count]
                 .iter()
                 .map(|descriptor| descriptor.trans_count)
                 .sum();
@@ -1022,8 +1084,52 @@ impl<FB: 'static> Hub75Swap<FB> {
 
 #[cfg(test)]
 mod tests {
+    use super::PIN_COUNT;
     use super::achieved_clock;
+    use super::check_pin_window;
     use super::divider_for;
+
+    /// Every run of fourteen consecutive GPIOs is a window the PIO can drive:
+    /// the reference board's, another run's, and the last one that fits.
+    #[test]
+    fn a_consecutive_window_is_accepted() {
+        // The reference board: the window starts at GP0.
+        let reference: [u8; PIN_COUNT] = core::array::from_fn(|offset| offset as u8);
+        check_pin_window(&reference);
+        // Another run of fourteen GPIOs: the same offsets, a different base.
+        let shifted: [u8; PIN_COUNT] = core::array::from_fn(|offset| 7 + offset as u8);
+        check_pin_window(&shifted);
+        // The last base a fourteen-pin window can have; its top pin is 31.
+        let top: [u8; PIN_COUNT] = core::array::from_fn(|offset| 18 + offset as u8);
+        check_pin_window(&top);
+        assert_eq!(usize::from(*top.last().unwrap()), 31);
+    }
+
+    /// A wiring mistake stops startup rather than driving the wrong pins.
+    #[test]
+    #[should_panic(expected = "consecutive and ascending")]
+    fn a_gap_in_the_pins_is_rejected() {
+        let mut numbers: [u8; PIN_COUNT] = core::array::from_fn(|offset| offset as u8);
+        numbers[5] = 9;
+        check_pin_window(&numbers);
+    }
+
+    /// Descending or interchanged pins are the same mistake.
+    #[test]
+    #[should_panic(expected = "consecutive and ascending")]
+    fn two_pins_the_wrong_way_round_are_rejected() {
+        let mut numbers: [u8; PIN_COUNT] = core::array::from_fn(|offset| offset as u8);
+        numbers.swap(0, 1);
+        check_pin_window(&numbers);
+    }
+
+    /// A window reaching past the PIO's five-bit pin fields is not drivable.
+    #[test]
+    #[should_panic(expected = "five bits")]
+    fn a_window_past_pin_31_is_rejected() {
+        let numbers: [u8; PIN_COUNT] = core::array::from_fn(|offset| 19 + offset as u8);
+        check_pin_window(&numbers);
+    }
 
     /// The divider is a ceiling, not a rounding of the request to nearest.
     ///

@@ -36,7 +36,10 @@ loop {
   interrupt: there is no ring size, no alignment rule and no power-of-two rule
   anywhere. Nothing in the driver knows what a plane or a row is, or how long one
   is, so plane-major, row-major, threshold and remapped framebuffers all work — the
-  layout only changes the cost.
+  layout only changes the cost. The table itself is **the caller's storage**:
+  `hub75_descriptors!(Fb)` sizes a `static` to the frame's own length (33 entries,
+  268 bytes, for a six-plane plane-major frame) and the driver keeps only a pointer,
+  so its own static is 44 bytes.
 * **One interrupt a frame.** It is the table's terminator, at the boundary, and it
   depends neither on the layout (32 runs a refresh plane-major, 1024 row-major for
   this panel) nor on where the linker put the framebuffer: 73/s at the examples' 10
@@ -49,7 +52,9 @@ loop {
 * Six planes is 63 panel scans a refresh, so the frame is the panel clock over
   129 024 words: 13.8 ms (≈72 Hz) at the examples' default 10 MHz, and 6.9 ms
   (≈145 Hz) with the `20mhz` feature, which the divider rounds to 18.75 MHz.
-  (Eight planes flickers at this clock; see `BIT_DEPTH`.)
+  Eight planes flickers at this clock, which is why the examples draw at six;
+  the depth is the framebuffer's `PLANES`, not a driver constant. The crate docs
+  have the geometry-to-framebuffer mapping.
 
 ## Cargo features
 
@@ -133,9 +138,9 @@ ceiling: the ladder at a faster divider, and an analyser for the number.
 
 | path | what |
 |---|---|
-| `src/driver.rs` | `Hub75`, `Hub75Config`, `Hub75Pins`, `Hub75Swap`, `on_dma_irq` |
-| `src/descriptor.rs` | the engine: the frame as a descriptor table — one entry a run, then the terminator that ends it — and the swap's delta applied in place |
+| `src/driver.rs` | `Hub75`, `Hub75Config`, `Hub75Pins`, `Hub75Swap`, `PioPin`, `on_dma_irq` |
+| `src/descriptor.rs` | the engine: the frame as a descriptor table — one entry a run, then the terminator that ends it — the swap's delta applied in place, and the `Hub75Descriptors` storage `hub75_descriptors!` allocates |
 | `src/programs.rs` | the PIO stream program and the word↔pin layout |
-| `src/pins.rs` | the Interstate 75 W pin map |
+| `src/pins.rs` | the HUB75 signals as offsets in bus order, and the reference board's other pins |
 | `tools/` | MicroPython bring-up scripts, capture and GIF helpers |
 | `test-all.sh`, `build-all.sh`, `clippy-all.sh`, `fmt-all.sh` | host tests and the target builds |

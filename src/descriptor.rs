@@ -32,10 +32,11 @@
 //! # The table is a frame, materialised
 //!
 //! One refresh is the sum of `reps` runs, so the table holds that many
-//! descriptors plus the terminator, and
-//! [`bcm_rep_count`](hub75_framebuffer::bcm_rep_count) sizes it at compile time
-//! without a framebuffer instance. The count is the layout's cost and not the
-//! panel's: 32 runs for a six-plane plane-major frame at any geometry, and
+//! descriptors plus the terminator, and [`descriptor_count`] sizes it at compile
+//! time without a framebuffer instance. The storage itself is the caller's, made
+//! by [`hub75_descriptors!`](crate::hub75_descriptors): the driver is handed a
+//! pointer and keeps nothing larger than that. The count is the layout's cost and
+//! not the panel's: 32 runs for a six-plane plane-major frame at any geometry, and
 //! `32 × NROWS` for the row-major layout. Nor is it the *buffer's*: an entry
 //! names its own address, so the count is the same whichever framebuffer is on
 //! the panel.
@@ -48,8 +49,10 @@
 //! still one number: the interrupt adds it to every run's address through
 //! [`patch`] before it restarts the chain. The terminator is never patched.
 
+use core::marker::PhantomData;
 use hub75_framebuffer::BcmLenReps;
 use hub75_framebuffer::FrameBuffer;
+use hub75_framebuffer::bcm_rep_count;
 
 /// Bytes in a framebuffer word.
 ///
@@ -61,14 +64,93 @@ pub const WORD_BYTES: usize = 2;
 /// Largest `TRANS_COUNT` RP2350 can hold: 28 bits, the top four being `MODE`.
 pub const MAX_TRANSFER_WORDS: u32 = (1 << 28) - 1;
 
-/// Run descriptors one frame's table holds.
+/// Descriptors a frame of framebuffer type `FB` needs: its runs, and the
+/// terminator that ends the chain.
 ///
-/// Sized for the largest sequence this crate's layouts produce for the boards
-/// `plan.md` names: `2^(PLANES-1) × NROWS` is `32 × 64` = 2048 for 64 scan rows at
-/// [`crate::BIT_DEPTH`], which is 16 KiB of table. A larger layout fails the
-/// assertion in the driver's constructor rather than overflowing, and this constant
-/// is raised deliberately for such a panel.
-pub const MAX_DESCRIPTORS: usize = 2048;
+/// The count is the *layout's*, and it is the crate's own sequence summed:
+/// [`bcm_rep_count`] is `2^(PLANES-1)` runs per sequence times `BCM_SEQUENCE_COUNT`
+/// scan rows. A six-plane plane-major frame is therefore 33 descriptors (264
+/// bytes) at any panel geometry, and a six-plane row-major one is `32 × NROWS + 1`.
+/// This is what [`Hub75Descriptors::COUNT`] sizes storage to, so a driver carries
+/// the table its own framebuffer needs and no more.
+#[must_use]
+pub const fn descriptor_count<FB: FrameBuffer>() -> usize {
+    bcm_rep_count::<FB>() + 1
+}
+
+/// Static descriptor storage for a framebuffer type.
+///
+/// The array is the caller's `static`, `N` long and typed by the framebuffer it
+/// will describe, so storage built for one framebuffer type cannot be handed to a
+/// driver configured for another. The driver keeps only a pointer to it, which is
+/// why its own static is a few words rather than a table sized for the largest
+/// layout.
+///
+/// Construct only through [`hub75_descriptors!`](crate::hub75_descriptors), which
+/// allocates the storage in a `static_cell::StaticCell` and hands back
+/// `&'static mut Hub75Descriptors<FB, N>` — the form [`Hub75::new`] takes.
+///
+/// [`Hub75::new`]: crate::Hub75::new
+pub struct Hub75Descriptors<FB, const N: usize> {
+    /// The frame's runs, then its terminator.
+    entries: [Descriptor; N],
+    /// The storage is typed by the framebuffer it describes.
+    _fb: PhantomData<fn() -> FB>,
+}
+
+impl<FB: FrameBuffer, const N: usize> Hub75Descriptors<FB, N> {
+    /// Descriptors a frame of this framebuffer type needs.
+    pub const COUNT: usize = descriptor_count::<FB>();
+
+    /// Creates the storage: every entry a terminator, so nothing runs yet.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `N` is not [`COUNT`](Self::COUNT). Constructed in a `static`,
+    /// where this is meant to be built, that is a compile-time error.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn new() -> Self {
+        assert!(
+            N == Self::COUNT,
+            "descriptor storage is not the length this framebuffer type needs"
+        );
+        Self {
+            entries: [Descriptor::TERMINATOR; N],
+            _fb: PhantomData,
+        }
+    }
+
+    /// The storage the control channel plays.
+    pub(crate) fn entries(&mut self) -> &mut [Descriptor] {
+        &mut self.entries
+    }
+}
+
+/// Allocates static descriptor storage sized for a framebuffer type.
+///
+/// The length is [`descriptor_count`] at compile time and the type is the
+/// framebuffer's, so the storage cannot be under-sized for the frame that will
+/// fill it, nor mixed up with another framebuffer's.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// type Fb = DmaFrameBuffer<32, 64, 6>;
+/// let descriptors = rp_hub75::hub75_descriptors!(Fb);
+/// ```
+#[macro_export]
+macro_rules! hub75_descriptors {
+    ($fb_type:ty) => {{
+        const __COUNT: usize = $crate::descriptor::descriptor_count::<$fb_type>();
+        static __STORAGE: $crate::static_cell::StaticCell<
+            $crate::descriptor::Hub75Descriptors<$fb_type, __COUNT>,
+        > = $crate::static_cell::StaticCell::new();
+        __STORAGE
+            .uninit()
+            .write($crate::descriptor::Hub75Descriptors::new())
+    }};
+}
 
 /// Descriptor words per run: `AL3_TRANS_COUNT`, then `AL3_READ_ADDR_TRIG`.
 ///
@@ -167,23 +249,55 @@ mod tests {
 
     use hub75_framebuffer::bitplane::plain::frame;
     use hub75_framebuffer::bitplane::plain::row;
+    use hub75_framebuffer::compute_rows;
 
     use super::*;
 
-    const NROWS: usize = crate::ROW_PAIRS;
-    const COLS: usize = crate::PANEL_WIDTH;
-    const PLANES: usize = crate::BIT_DEPTH as usize;
+    /// The panel the tests build their framebuffers for: the same 64×64 at six
+    /// planes the examples drive. The tests hold the table to the *type*, so
+    /// these only have to be a layout the crate can build.
+    const PANEL_WIDTH: usize = 64;
+    const NROWS: usize = compute_rows(64);
+    const PLANES: usize = 6;
 
     /// A plane-major framebuffer: one sequence of `PLANES` suffixes.
-    type FrameMajor = frame::DmaFrameBuffer<NROWS, COLS, PLANES>;
+    type FrameMajor = frame::DmaFrameBuffer<NROWS, PANEL_WIDTH, PLANES>;
     /// A row-major framebuffer: the same trait, one sequence per scan row.
-    type RowMajor = row::DmaFrameBuffer<NROWS, COLS, PLANES>;
+    type RowMajor = row::DmaFrameBuffer<NROWS, PANEL_WIDTH, PLANES>;
 
-    /// A filled table at the constant's bound, and the runs it holds.
-    fn runs_of<FB: FrameBuffer<Word = u16>>(fb: &FB) -> ([Descriptor; MAX_DESCRIPTORS + 1], usize) {
-        let mut entries = [Descriptor::TERMINATOR; MAX_DESCRIPTORS + 1];
-        let runs = fill(fb, &mut entries);
-        (entries, runs)
+    /// The storage each layout asks for: its own frame's length, not a bound.
+    type FrameStorage = Hub75Descriptors<FrameMajor, { descriptor_count::<FrameMajor>() }>;
+    type RowStorage = Hub75Descriptors<RowMajor, { descriptor_count::<RowMajor>() }>;
+
+    /// One frame's table, filled into storage sized for it: the runs it wrote,
+    /// then the terminator.
+    fn table_of<FB: FrameBuffer<Word = u16>, const N: usize>(
+        fb: &FB,
+        storage: &mut Hub75Descriptors<FB, N>,
+    ) -> std::vec::Vec<Descriptor> {
+        let entries = storage.entries();
+        let runs = fill(fb, entries);
+        entries[..=runs].to_vec()
+    }
+
+    /// The storage a framebuffer type gets is exactly its own frame's length, and
+    /// the count is the layout's: one sequence at any geometry plane-major, one
+    /// per scan row row-major.
+    #[test]
+    fn storage_is_sized_for_the_framebuffer() {
+        assert_eq!(FrameStorage::COUNT, 32 + 1, "32 runs, plane-major");
+        assert_eq!(RowStorage::COUNT, 32 * NROWS + 1, "32 runs per scan row");
+        // `new` asserts the two agree, so this is the same check at run time.
+        let _ = FrameStorage::new();
+        let _ = RowStorage::new();
+    }
+
+    /// Storage too short for the frame is a construction failure, not a silent
+    /// overflow.
+    #[test]
+    #[should_panic(expected = "not the length")]
+    fn undersized_storage_is_rejected() {
+        let _ = Hub75Descriptors::<FrameMajor, 4>::new();
     }
 
     /// Every run reads inside the framebuffer, which is what makes a swap a
@@ -191,11 +305,15 @@ mod tests {
     /// ends with the terminator that stops it.
     #[test]
     fn every_run_lies_inside_the_framebuffer() {
-        fn check<FB: FrameBuffer<Word = u16>>(fb: &FB) {
-            let (entries, runs) = runs_of(fb);
+        fn check<FB: FrameBuffer<Word = u16>, const N: usize>(
+            fb: &FB,
+            storage: &mut Hub75Descriptors<FB, N>,
+        ) {
+            let table = table_of(fb, storage);
+            let runs = table.len() - 1;
             let base = fb as *const FB as u32;
             let end = base + size_of::<FB>() as u32;
-            for (index, descriptor) in entries[..runs].iter().enumerate() {
+            for (index, descriptor) in table[..runs].iter().enumerate() {
                 assert!(
                     descriptor.read_addr >= base,
                     "run {index} starts before the framebuffer"
@@ -206,24 +324,30 @@ mod tests {
                 );
             }
             assert_eq!(
-                entries[runs],
+                table[runs],
                 Descriptor::TERMINATOR,
                 "fill ends the chain after the runs it wrote"
             );
+            assert_eq!(
+                runs,
+                descriptor_count::<FB>() - 1,
+                "the table is one run per repetition, and the storage is its length"
+            );
         }
-        check(&FrameMajor::new());
-        check(&RowMajor::new());
+        check(&FrameMajor::new(), &mut FrameStorage::new());
+        check(&RowMajor::new(), &mut RowStorage::new());
     }
 
     /// A swap is one delta, and two deltas that cancel restore the table.
     #[test]
     fn a_patch_moves_only_the_run_addresses() {
         let fb = FrameMajor::new();
-        let (mut entries, runs) = runs_of(&fb);
-        let before: std::vec::Vec<Descriptor> = entries[..=runs].to_vec();
+        let mut table = table_of(&fb, &mut FrameStorage::new());
+        let runs = table.len() - 1;
+        let before = table.clone();
 
-        patch(&mut entries, runs, 0x1000);
-        for (index, descriptor) in entries[..runs].iter().enumerate() {
+        patch(&mut table, runs, 0x1000);
+        for (index, descriptor) in table[..runs].iter().enumerate() {
             assert_eq!(
                 descriptor.read_addr,
                 before[index].read_addr + 0x1000,
@@ -232,13 +356,13 @@ mod tests {
             assert_eq!(descriptor.trans_count, before[index].trans_count);
         }
         assert_eq!(
-            entries[runs],
+            table[runs],
             Descriptor::TERMINATOR,
             "the terminator is not patched"
         );
 
-        patch(&mut entries, runs, 0u32.wrapping_sub(0x1000));
-        assert_eq!(&entries[..=runs], before.as_slice());
+        patch(&mut table, runs, 0u32.wrapping_sub(0x1000));
+        assert_eq!(table, before);
     }
 
     /// A table that cannot hold the frame is a startup failure, not a silent
