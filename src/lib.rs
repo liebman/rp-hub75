@@ -17,6 +17,10 @@
 //! | clock / strobe / output-enable | GP11 / GP12 / GP13 |
 //! | buttons, status LED, Qw/ST | GP14, GP15, GP22 / GP18 / GP20 + GP21 |
 //!
+//! GP11 is the word's one reserved bit, which is where the clock is wired there;
+//! [`Hub75Pins::new`] takes the clock as its own argument and accepts a pin
+//! outside the window instead.
+//!
 //! # Using it
 //!
 //! Two framebuffers and their descriptor table, one driver, and a swap per
@@ -59,11 +63,13 @@
 //! The library holds no panel: each example states the one it is wired to and
 //! derives its framebuffer type from it, because the board — the Interstate
 //! 75 W — is a HUB75 header with no panel attached. What is the board's is the
-//! **pin window** and the **signal order**: [`Hub75Pins::new`] takes fourteen
-//! GPIOs in bus order, derives the window's base from the first one, and checks
-//! that the rest follow it, while the order within that window is
-//! `hub75-framebuffer`'s `interstate75` feature. Base and order are independent:
-//! any fourteen consecutive GPIOs carry the same signals in the same order.
+//! **pin window** and the **word layout**: [`Hub75Pins::new`] takes the thirteen
+//! signals in bus order plus the clock, derives the window's base from the lowest
+//! pin, and checks every signal against [`pins::LAYOUT`] — so a wiring mistake
+//! stops startup rather than driving the wrong pins — while the word layout
+//! itself is `hub75-framebuffer`'s `interstate75` feature. Base and wiring are
+//! independent: any fourteen consecutive GPIOs carry the same signals in the same
+//! order, and the clock may be one of them or a pin of its own.
 //!
 //! # How the panel is driven
 //!

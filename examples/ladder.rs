@@ -170,9 +170,11 @@ fn main() -> ! {
             pins.gpio8,
             pins.gpio9,
             pins.gpio10,
-            pins.gpio11,
+            // STB and OE are the word's last two signal bits; the clock is not a
+            // signal at all — the side-set drives it, and it is wired to GP11.
             pins.gpio12,
             pins.gpio13,
+            pins.gpio11,
         ),
         clocks.system_clock.freq(),
         // The one knob that trades timing margin for refresh rate: a rung that

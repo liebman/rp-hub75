@@ -18,23 +18,24 @@
 //! | 0-2 | 0-2 | `R0 G0 B0` |
 //! | 3-5 | 3-5 | `R1 G1 B1` |
 //! | 6-10 | 6-10 | `A B C D E` |
-//! | 11 | 11 | `CLK`, reserved and always zero — the PIO drives it |
+//! | 11 | 11 | reserved, always zero — the clock is outside the word |
 //! | 12 | 12 | `STB`, the latch |
 //! | 13 | 13 | `OE`, active low |
 //!
 //! Bit *n* is pin *n* of the window, so one `out pins, 14` puts a whole word on
 //! the pins, and the only thing left for the PIO to *generate* rather than copy
-//! out of the word is the clock. The window's first pin is the base
+//! out of the word is the clock. The window's lowest pin is the base
 //! [`crate::Hub75Pins`] derives, so this one table describes any run of fourteen
-//! GPIOs; [`crate::pins`] names the offsets, which are also the word bits.
+//! GPIOs; [`crate::pins`] names the word bits, which are also the offsets from
+//! that base.
 //!
 //! # The program: two cycles per word, one word per column
 //!
 //! ```text
 //! cycle         1                     2
 //!               out pins, 14  side 0   nop  side 1
-//! GP0-13        the word               hold
-//! GP11 (CLK)    low                    rising edge
+//! window pins   the word               hold
+//! clock pin     low                    rising edge
 //! panel         data changes           shifts this column in
 //! ```
 //!
@@ -57,23 +58,25 @@
 //! word's two spare top bits in the OSR and put every following word two bits out
 //! of place, which is the M2b confetti in a new costume.
 //!
-//! # The one hair: bit 11
+//! # The one hair: the reserved bit
 //!
-//! The reserved clock slot sits inside the `out pins, 14` window, so every word
-//! drives GP11 as well as the side-set does, and bit 11 is always zero. That costs
-//! nothing: the `out` runs on the cycle whose side-set holds the clock low, so the
-//! two write the same level and either one winning gives the same pins. The clock's
-//! polarity is the pad's, which inverts both writes together, so the agreement
-//! holds for either edge a panel takes.
+//! The slot the framebuffer keeps at zero sits inside the `out pins, 14` window,
+//! so every word drives that pin as well as the side-set does, and the bit is
+//! always zero. That costs nothing: the `out` runs on the cycle whose side-set
+//! holds the clock low, so the two write the same level and either one winning
+//! gives the same pins. The clock's polarity is the pad's, which inverts both
+//! writes together, so the agreement holds for either edge a panel takes.
 //!
-//! The two windows may only overlap on the clock pin. A side-set aimed at another
-//! bus pin would be a fight with every word that follows, and the side-set would
-//! win it — RP2350 datasheet §11.5.6, *"If a side-set overlaps with an OUT/SET
-//! performed by that state machine on the same cycle, the side-set takes
-//! precedence in the overlapping region"* — so the corruption of that pin would be
-//! silent rather than an error. The window is one bit on the clock by construction:
-//! `.side_set 1` against `side_set_pin_base(base + pins::CLK)` in
-//! [`crate::driver`].
+//! An overlap is only free on that one pin, which is why the clock is wired
+//! there or outside the window altogether. A side-set aimed at another bus pin
+//! would be a fight with every word that follows, and the side-set would win it —
+//! RP2350 datasheet §11.5.6, *"If a side-set overlaps with an OUT/SET performed by
+//! that state machine on the same cycle, the side-set takes precedence in the
+//! overlapping region"* — so the corruption of that pin would be silent rather
+//! than an error. `.side_set 1` against `side_set_pin_base(clock)` in
+//! [`crate::driver`] is what keeps the window to one bit, and
+//! [`crate::Hub75Pins::new`] refuses any clock pin inside the window other than
+//! [`pins::RESERVED`].
 //!
 //! # The latch
 //!
@@ -95,25 +98,9 @@
 use crate::pins;
 use pio::{Program, RP2040_MAX_PROGRAM_SIZE};
 
-/// Bits of framebuffer word a column consumes: the whole 16-bit word, which is
-/// also the transfer size the DMA moves. The top two bits are spare.
-pub const BITS_PER_WORD: u32 = 16;
-
-/// Bit of a framebuffer word that drives [`pins::STB`], the row latch.
-pub const LATCH_BIT: u16 = 1 << pins::STB;
-
-/// Bit of a framebuffer word that drives [`pins::OE`].
-///
-/// The pin is active low, so this bit *set* means the outputs are off — which is
-/// what `hub75-framebuffer` uses as its blanking level by default. The driver
-/// streams the framebuffer's own words and nothing else, so that convention *is*
-/// the blanking behavior; the crate's `invert-oe` feature is the only switch for
-/// a panel whose output enable is active high.
-pub const OE_BIT: u16 = 1 << pins::OE;
-
 /// `pull_threshold` for the stream program: the fourteen bits of the word that
 /// one `out pins, 14` shifts out. See the module docs — this is what keeps one
-/// FIFO word per column, and why it is not `BITS_PER_WORD`.
+/// FIFO word per column, and why it is not the whole 16-bit word.
 pub const PULL_THRESHOLD: u8 = pins::WORD_PINS;
 
 /// PIO cycles a word costs: the word and the clock edge, in either clock
@@ -121,15 +108,17 @@ pub const PULL_THRESHOLD: u8 = pins::WORD_PINS;
 pub const CYCLES_PER_WORD: u32 = 2;
 
 /// The stream program: one framebuffer word per panel column, straight out to
-/// the fourteen pins of the HUB75 window, with the panel clock on the window's
-/// [`pins::CLK`] pin.
+/// the fourteen pins of the HUB75 window, with the panel clock on a pin the
+/// side-set drives.
 ///
 /// Configure the state machine with `out_pins(base, WORD_PINS)`,
-/// `side_set_pin_base(base + pins::CLK)`, `autopull(true)`,
+/// `side_set_pin_base(clock)`, `autopull(true)`,
 /// `pull_threshold(PULL_THRESHOLD)` and
 /// `out_shift_direction(ShiftDirection::Right)` — the words are handed out
 /// least-significant bit first, and `Left` reverses every word, which turns the
-/// picture into noise. Then `set_pindirs` all fourteen pins as outputs.
+/// picture into noise. Then `set_pindirs` the thirteen signal pins and the clock
+/// as outputs; [`crate::pins::RESERVED`] is only an output when the clock is
+/// wired there.
 ///
 /// The program is the same for either clock edge: the word changes with the clock
 /// at its idle level, so the panel gets a full cycle of setup before the edge it
@@ -139,8 +128,8 @@ pub fn hub75_stream() -> Program<{ RP2040_MAX_PROGRAM_SIZE }> {
     pio::pio_asm!(
         ".side_set 1",
         ".wrap_target",
-        "    out pins, 14     side 0   ; the word -> GP0-13, clock low",
-        "    nop              side 1   ; CLK rising edge: the panel shifts this column in",
+        "    out pins, 14     side 0   ; the word -> the window, clock low",
+        "    nop              side 1   ; the clock's edge: the panel shifts this column in",
         ".wrap",
     )
     .program

@@ -3,11 +3,11 @@
 //!
 //! # What runs the panel
 //!
-//! A single state machine streams framebuffer words straight at GP0-13 (see
-//! [`crate::programs`]). A **control** DMA channel plays a [`crate::descriptor`]
-//! table into the data channel's `AL3` register block, and the data channel
-//! chains back to it on every completion, so the two hand the picture to each
-//! other in hardware:
+//! A single state machine streams framebuffer words straight at the HUB75 pin
+//! window (see [`crate::programs`]), the reference board's being GP0-13. A
+//! **control** DMA channel plays a [`crate::descriptor`] table into the data
+//! channel's `AL3` register block, and the data channel chains back to it on
+//! every completion, so the two hand the picture to each other in hardware:
 //!
 //! ```text
 //! control channel  (trans_count, read_addr) → the data channel's AL3 block
@@ -141,39 +141,67 @@ fn achieved_clock(system_clock_hz: u32, divider: u32) -> u32 {
     system_clock_hz / divider / CYCLES_PER_WORD
 }
 
-/// Pins a [`Hub75Pins`] holds: the fourteen of the HUB75 bus.
+/// Pins in the HUB75 window: the fourteen the framebuffer's word is shifted
+/// into, one of which carries no signal.
 pub const PIN_COUNT: usize = pins::WORD_PINS as usize;
+
+/// Signals a framebuffer word carries, in bus order.
+pub const SIGNAL_COUNT: usize = pins::SIGNAL_COUNT;
+
+/// Signal names, in the order [`Hub75Pins::new`] takes the pins, for the
+/// messages [`check_bus`] panics with.
+const SIGNAL_NAMES: [&str; SIGNAL_COUNT] = [
+    "R0", "G0", "B0", "R1", "G1", "B1", "A", "B", "C", "D", "E", "STB", "OE",
+];
 
 /// A GPIO the PIO can drive.
 ///
-/// [`Hub75Pins::new`] takes the fourteen bus pins as concrete types, so this
-/// bound is what makes handing over a pin the PIO cannot reach a compile error.
-/// The pins' GPIO *numbers* are checked at startup instead: they must be
-/// consecutive and ascending, and the whole window must fit the PIO's pin fields.
+/// [`Hub75Pins::new`] takes the bus pins as concrete types, so this bound is
+/// what makes handing over a pin the PIO cannot reach a compile error. The pins'
+/// GPIO *numbers* are checked at startup instead: each signal must sit on the
+/// window pin its word bit is shifted to, and the whole window must fit the
+/// PIO's pin fields.
 pub trait PioPin: hal::gpio::PinId + hal::gpio::ValidFunction<FunctionPio0> {}
 
 impl<P> PioPin for P where P: hal::gpio::PinId + hal::gpio::ValidFunction<FunctionPio0> {}
 
-/// Checks that a bus-order pin list is a window the PIO can drive.
+/// Checks that a bus-order pin list is a window the PIO can drive and that each
+/// signal is where its word bit lands.
 ///
-/// A HUB75 bus is fourteen consecutive GPIOs, ascending in bus order, and that
-/// window is what `out pins, 14` writes: pin *n* of the window is `base + n`, so
-/// the base is the first pin. Anything else would drive the wrong pins, which is
-/// a wiring mistake rather than a dark panel, so it stops startup.
+/// A HUB75 bus is fourteen consecutive GPIOs. `out pins, 14` writes
+/// `[base, base + 13]` and window pin *n* receives framebuffer word bit *n*, so
+/// the signal on a pin is decided by the word's layout: the pin given for signal
+/// *i* must be `base + LAYOUT[i]`. Anything else would drive the wrong pins —
+/// swapped colours, a latch that never latches — which is a wiring mistake rather
+/// than a dark panel, so it stops startup.
+///
+/// The clock is checked apart from the signals, being the one pin the side-set
+/// drives rather than the word: it may be the reserved window pin
+/// ([`pins::RESERVED`], where the word's zero and the clock agree) or any pin
+/// outside the window, but not a signal pin — the side-set would win on every
+/// cycle and corrupt that signal silently.
 ///
 /// # Panics
 ///
-/// Panics if the pins are not consecutive and ascending in the order given, or
-/// if the window does not fit the PIO's five-bit pin fields — a base above
-/// [`pins::MAX_WORD_BASE`].
-fn check_pin_window(numbers: &[u8; PIN_COUNT]) {
-    let base = numbers[0];
-    for (offset, &number) in numbers.iter().enumerate() {
+/// Panics if a signal is not on the window pin its word bit is driven to, if
+/// the window does not fit the PIO's five-bit pin fields — a base above
+/// [`pins::MAX_WORD_BASE`] — or if the clock pin is a window pin other than
+/// [`pins::RESERVED`], or is not a pin the PIO can address.
+fn check_bus(numbers: &[u8; SIGNAL_COUNT], clock: u8) {
+    let base = *numbers
+        .iter()
+        .min()
+        .expect("a bus has signals, so it has a lowest pin");
+    for (index, &number) in numbers.iter().enumerate() {
+        let expected = base + pins::LAYOUT[index];
         assert_eq!(
-            usize::from(number),
-            usize::from(base) + offset,
-            "{number} is not pin {offset} of the window starting at {base}: \
-             the HUB75 pins must be consecutive and ascending in bus order"
+            number,
+            expected,
+            "{} is wired to pin {number}, but framebuffer word bit {} is driven \
+             to pin {expected} of the window starting at {base}: the signal is \
+             on the wrong pin",
+            SIGNAL_NAMES[index],
+            pins::LAYOUT[index],
         );
     }
     assert!(
@@ -181,6 +209,24 @@ fn check_pin_window(numbers: &[u8; PIN_COUNT]) {
         "a {PIN_COUNT}-pin window cannot start at {base}: the PIO's pin fields \
          are five bits, so it must start at {} or lower",
         pins::MAX_WORD_BASE
+    );
+    assert!(
+        clock <= pins::MAX_PIN,
+        "the clock is on pin {clock}, which the PIO cannot address: its pin \
+         fields are five bits, so the clock must be on pin {} or lower",
+        pins::MAX_PIN
+    );
+    // The window is fourteen pins wide from `base`, so the checks above have it
+    // inside the PIO's range and neither sum can overflow.
+    let reserved = base + pins::RESERVED;
+    let top = base + (pins::WORD_PINS - 1);
+    assert!(
+        clock < base || clock == reserved || clock > top,
+        "the clock is on pin {clock}, which is inside the window starting at \
+         {base} but is not its reserved pin {reserved}: the side-set takes \
+         precedence over the word on that pin, so it would overwrite the signal \
+         there on every cycle. Wire the clock to pin {reserved} — where the \
+         framebuffer word holds zero — or to a pin outside the window"
     );
 }
 
@@ -259,31 +305,41 @@ pub enum Hub75Error {
 // Pins
 // ---------------------------------------------------------------------------
 
-/// The fourteen HUB75 pins, converted and owned by the driver.
+/// The HUB75 pins, converted and owned by the driver.
 ///
-/// The constructor takes them in bus order — `R0 G0 B0 R1 G1 B1 A B C D E CLK
-/// STB OE` — so the order is the signature, and it checks that they are fourteen
-/// consecutive GPIOs ascending in that order. The handles are kept so nothing
-/// else can claim the bus. `Pins::new` yields pins in `FunctionNull`; this does
-/// the `into_function` step.
+/// The constructor takes the thirteen signals in bus order — `R0 G0 B0 R1 G1 B1
+/// A B C D E STB OE` — and the clock separately, because the clock is the one
+/// pin the PIO generates rather than copies out of a framebuffer word. It checks
+/// that the signals are a fourteen-pin window with each one on the pin its word
+/// bit is driven to, and that the clock is either that window's reserved pin or
+/// a pin outside it. The handles are kept so nothing else can claim the bus.
+/// `Pins::new` yields pins in `FunctionNull`; this does the `into_function` step.
 pub struct Hub75Pins {
-    /// The window's fourteen pins, in bus order.
-    hold: [hal::gpio::Pin<DynPinId, FunctionPio0, PullNone>; PIN_COUNT],
+    /// The GPIO number the fourteen-pin window starts at.
+    base: u8,
+    /// The window's signal pins, in bus order.
+    hold: [hal::gpio::Pin<DynPinId, FunctionPio0, PullNone>; SIGNAL_COUNT],
+    /// The panel clock, wherever it is wired.
+    clock: hal::gpio::Pin<DynPinId, FunctionPio0, PullNone>,
 }
 
 impl Hub75Pins {
-    /// Converts the panel's fourteen pins to an owned pin set.
+    /// Converts the panel's pins to an owned pin set.
     ///
     /// The order is the HUB75 bus: top half (`R0 G0 B0`), bottom half
-    /// (`R1 G1 B1`), row address (`A B C D E`), then `CLK STB OE`. The pins must
-    /// be fourteen consecutive GPIOs ascending in that order; the first one is
-    /// the window's base, which [`base`](Self::base) reports. See [`crate::pins`]
-    /// for the offsets this order is made of.
+    /// (`R1 G1 B1`), row address (`A B C D E`), then `STB` and `OE`. The clock is
+    /// the last argument and may be any GPIO the PIO can drive: the window pin
+    /// [`pins::RESERVED`], where the frame buffer's word holds zero, or a pin
+    /// outside the window. The lowest signal pin is the window's base, which
+    /// [`base`](Self::base) reports. See [`crate::pins`] for the offsets this
+    /// order is made of, and [`pins::LAYOUT`] for the word bit each one carries.
     ///
     /// # Panics
     ///
-    /// Panics if the pins are not consecutive and ascending in the order given,
-    /// or if the window does not fit the PIO's five-bit pin fields.
+    /// Panics if a signal is not on the window pin its word bit is driven to, if
+    /// the window does not fit the PIO's five-bit pin fields, or if the clock is
+    /// a window pin other than [`pins::RESERVED`] or a pin the PIO cannot
+    /// address.
     #[allow(clippy::too_many_arguments)]
     pub fn new<I0, I1, I2, I3, I4, I5, I6, I7, I8, I9, I10, I11, I12, I13, P>(
         r0: hal::gpio::Pin<I0, FunctionNull, P>,
@@ -297,9 +353,9 @@ impl Hub75Pins {
         c: hal::gpio::Pin<I8, FunctionNull, P>,
         d: hal::gpio::Pin<I9, FunctionNull, P>,
         e: hal::gpio::Pin<I10, FunctionNull, P>,
-        clk: hal::gpio::Pin<I11, FunctionNull, P>,
-        stb: hal::gpio::Pin<I12, FunctionNull, P>,
-        oe: hal::gpio::Pin<I13, FunctionNull, P>,
+        stb: hal::gpio::Pin<I11, FunctionNull, P>,
+        oe: hal::gpio::Pin<I12, FunctionNull, P>,
+        clk: hal::gpio::Pin<I13, FunctionNull, P>,
     ) -> Self
     where
         I0: PioPin,
@@ -327,6 +383,7 @@ impl Hub75Pins {
                 pin.into_pull_type::<PullNone>().into_function();
             pin.into_dyn_pin()
         }
+        let clock = hold(clk);
         let hold = [
             hold(r0),
             hold(g0),
@@ -339,38 +396,56 @@ impl Hub75Pins {
             hold(c),
             hold(d),
             hold(e),
-            hold(clk),
             hold(stb),
             hold(oe),
         ];
-        let numbers: [u8; PIN_COUNT] = core::array::from_fn(|index| hold[index].id().num);
-        // Checked here, so a mis-wired bus stops startup; [`base`](Self::base)
-        // reads the same first pin.
-        check_pin_window(&numbers);
-        Self { hold }
+        let numbers: [u8; SIGNAL_COUNT] = core::array::from_fn(|index| hold[index].id().num);
+        // Checked here, so a mis-wired bus stops startup; the base the check
+        // derives is stored rather than recomputed.
+        check_bus(&numbers, clock.id().num);
+        let base = *numbers
+            .iter()
+            .min()
+            .expect("a bus has signals, so it has a lowest pin");
+        Self { base, hold, clock }
     }
 
     /// Inverts the clock pin's output in the GPIO block.
     ///
     /// A panel that takes the column on the clock's falling edge gets it here, not
     /// from a second program: the pad inverts whatever the PIO drives on that pin —
-    /// the side-set and the word's own bit 11 alike — and both write zero on the
-    /// cycle the word changes, so the two agree and the whole bus stays in step with
-    /// the clock.
+    /// the side-set, and the word's own reserved bit where the clock occupies it —
+    /// and both write zero on the cycle the word changes, so the two agree and the
+    /// whole bus stays in step with the clock.
     #[cfg(feature = "invert-clock")]
     fn invert_clock(&mut self) {
-        let index = pins::CLK as usize;
-        debug_assert_eq!(self.hold[index].id().num, self.base() + pins::CLK);
-        self.hold[index].set_output_override(OutputOverride::Invert);
+        debug_assert!(
+            self.clock() == self.base + pins::RESERVED
+                || self.clock() > self.base + (pins::WORD_PINS - 1)
+        );
+        self.clock.set_output_override(OutputOverride::Invert);
+    }
+
+    /// The GPIO number of window pin `index`: the signal [`pins::LAYOUT`] places
+    /// there.
+    fn window_pin(&self, index: usize) -> u8 {
+        self.hold[index].id().num
     }
 
     /// The GPIO number the fourteen-pin window starts at.
     ///
-    /// The first pin [`new`](Self::new) was given, which `out pins, 14` writes
-    /// through `base + 13`; the panel clock is the window's eleventh pin,
-    /// [`base`](Self::base) plus [`pins::CLK`].
+    /// The lowest signal pin [`new`](Self::new) was given — `R0`'s, on the
+    /// reference wiring — which `out pins, 14` writes through `base + 13`.
     pub fn base(&self) -> u8 {
-        self.hold[0].id().num
+        self.base
+    }
+
+    /// The GPIO number the panel clock is wired to.
+    ///
+    /// [`base`](Self::base) plus [`pins::RESERVED`] on the reference wiring, or a
+    /// pin outside the window.
+    pub fn clock(&self) -> u8 {
+        self.clock.id().num
     }
 }
 
@@ -713,9 +788,11 @@ fn bring_up(
     let (mut pio, sm0, _, _, _) = pio.split(resets);
 
     // The window the framebuffer words are shifted into. `Hub75Pins::new` has
-    // already checked that the fourteen pins are consecutive and ascending, so
-    // the base is simply the first pin and the clock sits `pins::CLK` above it.
+    // already checked that the signals are a fourteen-pin window, each on the pin
+    // its word bit is driven to, so the base is the lowest signal pin and the
+    // clock is wherever it was told the clock is.
     let base = pins.base();
+    let clock = pins.clock();
 
     // The clock's polarity is the pad's, so the pin is inverted before the
     // machine starts and the first clock level is already the idle one.
@@ -729,7 +806,7 @@ fn bring_up(
         .expect("the stream program fits the instruction memory");
     let (mut sm, _, tx) = PIOBuilder::from_installed_program(program)
         .out_pins(base, pins::WORD_PINS)
-        .side_set_pin_base(base + pins::CLK)
+        .side_set_pin_base(clock)
         .clock_divisor_fixed_point(divider, 0)
         .out_shift_direction(ShiftDirection::Right)
         .autopull(true)
@@ -737,9 +814,14 @@ fn bring_up(
         .buffers(Buffers::OnlyTx)
         .build(sm0);
 
-    // Every pin of the word is an output: the machine drives the whole bus,
-    // clock included.
-    sm.set_pindirs((0..pins::WORD_PINS).map(|offset| (base + offset, PinDir::Output)));
+    // Every signal pin and the clock are outputs: the machine drives the whole
+    // bus. The window's reserved pin is left alone unless the clock is wired
+    // there, so a clock outside the window does not drive a pin held at zero.
+    sm.set_pindirs(
+        (0..SIGNAL_COUNT)
+            .map(|index| (pins.window_pin(index), PinDir::Output))
+            .chain(core::iter::once((clock, PinDir::Output))),
+    );
     // Keep the machine running. The handle has no `Drop`, so dropping it here
     // would be safe; holding it documents who owns the machine.
     let _sm = sm.start();
@@ -1084,51 +1166,98 @@ impl<FB: 'static> Hub75Swap<FB> {
 
 #[cfg(test)]
 mod tests {
-    use super::PIN_COUNT;
+    use super::SIGNAL_COUNT;
     use super::achieved_clock;
-    use super::check_pin_window;
+    use super::check_bus;
     use super::divider_for;
+    use crate::pins;
+
+    /// The pins of a window starting at `base`, in bus order: signal *i* on the
+    /// pin its word bit is driven to.
+    fn window(base: u8) -> [u8; SIGNAL_COUNT] {
+        core::array::from_fn(|index| base + pins::LAYOUT[index])
+    }
 
     /// Every run of fourteen consecutive GPIOs is a window the PIO can drive:
     /// the reference board's, another run's, and the last one that fits.
     #[test]
-    fn a_consecutive_window_is_accepted() {
-        // The reference board: the window starts at GP0.
-        let reference: [u8; PIN_COUNT] = core::array::from_fn(|offset| offset as u8);
-        check_pin_window(&reference);
+    fn a_window_is_accepted() {
+        // The reference board: the window starts at GP0 and the clock is its
+        // reserved pin.
+        let reference = window(0);
+        check_bus(&reference, pins::RESERVED);
         // Another run of fourteen GPIOs: the same offsets, a different base.
-        let shifted: [u8; PIN_COUNT] = core::array::from_fn(|offset| 7 + offset as u8);
-        check_pin_window(&shifted);
+        let shifted = window(7);
+        check_bus(&shifted, 7 + pins::RESERVED);
         // The last base a fourteen-pin window can have; its top pin is 31.
-        let top: [u8; PIN_COUNT] = core::array::from_fn(|offset| 18 + offset as u8);
-        check_pin_window(&top);
+        let top = window(pins::MAX_WORD_BASE);
+        check_bus(&top, pins::MAX_WORD_BASE + pins::RESERVED);
         assert_eq!(usize::from(*top.last().unwrap()), 31);
     }
 
-    /// A wiring mistake stops startup rather than driving the wrong pins.
+    /// The clock is the one pin that may be specified apart from the window: on
+    /// the reserved pin, where the word holds zero, or anywhere outside it.
     #[test]
-    #[should_panic(expected = "consecutive and ascending")]
-    fn a_gap_in_the_pins_is_rejected() {
-        let mut numbers: [u8; PIN_COUNT] = core::array::from_fn(|offset| offset as u8);
-        numbers[5] = 9;
-        check_pin_window(&numbers);
+    fn a_clock_outside_the_window_is_accepted() {
+        let signals = window(0);
+        // Above the window.
+        check_bus(&signals, 14);
+        check_bus(&signals, pins::MAX_PIN);
+        // And below and above a window that does not start at zero.
+        let shifted = window(7);
+        check_bus(&shifted, 6);
+        check_bus(&shifted, 21);
     }
 
-    /// Descending or interchanged pins are the same mistake.
+    /// A signal on the wrong pin is a wiring mistake, and it stops startup
+    /// rather than driving the wrong pins.
     #[test]
-    #[should_panic(expected = "consecutive and ascending")]
-    fn two_pins_the_wrong_way_round_are_rejected() {
-        let mut numbers: [u8; PIN_COUNT] = core::array::from_fn(|offset| offset as u8);
-        numbers.swap(0, 1);
-        check_pin_window(&numbers);
+    #[should_panic(expected = "the signal is on the wrong pin")]
+    fn a_signal_on_another_pin_is_rejected() {
+        let mut numbers = window(0);
+        numbers[0] = 1;
+        numbers[1] = 0;
+        check_bus(&numbers, pins::RESERVED);
+    }
+
+    /// A gap in the window shifts every signal past it.
+    #[test]
+    #[should_panic(expected = "the signal is on the wrong pin")]
+    fn a_gap_in_the_window_is_rejected() {
+        let mut numbers = window(0);
+        numbers[5] = 9;
+        check_bus(&numbers, pins::RESERVED);
+    }
+
+    /// Two signals on one pin leave another undriven, which is the same check.
+    #[test]
+    #[should_panic(expected = "the signal is on the wrong pin")]
+    fn a_repeated_pin_is_rejected() {
+        let mut numbers = window(0);
+        numbers[1] = numbers[0];
+        check_bus(&numbers, pins::RESERVED);
     }
 
     /// A window reaching past the PIO's five-bit pin fields is not drivable.
     #[test]
     #[should_panic(expected = "five bits")]
     fn a_window_past_pin_31_is_rejected() {
-        let numbers: [u8; PIN_COUNT] = core::array::from_fn(|offset| 19 + offset as u8);
-        check_pin_window(&numbers);
+        check_bus(&window(pins::MAX_WORD_BASE + 1), pins::MAX_PIN);
+    }
+
+    /// The clock on a signal pin would be overwritten by the side-set on every
+    /// cycle, silently, so it is refused.
+    #[test]
+    #[should_panic(expected = "not its reserved pin")]
+    fn a_clock_on_a_signal_pin_is_rejected() {
+        check_bus(&window(0), pins::OE);
+    }
+
+    /// The PIO cannot reach a pin past 31, so a clock there is refused too.
+    #[test]
+    #[should_panic(expected = "cannot address")]
+    fn a_clock_the_pio_cannot_reach_is_rejected() {
+        check_bus(&window(0), pins::MAX_PIN + 1);
     }
 
     /// The divider is a ceiling, not a rounding of the request to nearest.

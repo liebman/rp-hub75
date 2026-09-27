@@ -29,24 +29,32 @@ Two facts decide most changes:
 A HUB75 bus needs **fourteen consecutive** GPIOs: `out pins, 14` writes
 `[OUT_BASE, OUT_BASE + 13]`, and no PIO instruction can move that window. A port
 to another board is therefore a *base pin* plus the same bus order —
-`R0 G0 B0 R1 G1 B1 A B C D E CLK STB OE`. Keep GP0–GP13 as the default and as the
-reference wiring, but do not let new code assume it.
+`R0 G0 B0 R1 G1 B1 A B C D E STB OE`, with the clock specified apart. Keep
+GP0–GP13 as the default and as the reference wiring, but do not let new code
+assume it.
 
-Status: the pin selection is a parameter. `Hub75Pins::new` takes the fourteen
-pins as any GPIOs the PIO can drive — fourteen `PinId`s and a `PioPin` bound, not
-`Gpio0`–`Gpio13` — derives the base from the first pin, and checks at startup that
-they are consecutive and ascending (a wiring mistake stops startup rather than
-driving the wrong pins, since a runtime pin number cannot be checked by the type
-system). `src/driver.rs` programs `out_pins(pins.base(), …)` and
-`side_set_pin_base(pins.base() + pins::CLK)`; `src/pins.rs` holds signal
-*offsets* in bus order rather than absolute GPIO numbers, and `MAX_WORD_BASE` is
-the highest base a fourteen-pin window can have (`SM_PINCTRL`'s `OUT_BASE` and
-`SIDESET_BASE` are five-bit fields, so the PIO addresses pins 0–31). The signal
-*order* is still the `interstate75` feature of `hub75-framebuffer`, which is
-per-board; base and order are independent axes.
+Status: the pin selection is a parameter. `Hub75Pins::new` takes the thirteen
+signals in bus order as any GPIOs the PIO can drive — thirteen `PinId`s and a
+`PioPin` bound, not `Gpio0`–`Gpio13` — derives the window's base from the *lowest*
+pin, and checks at startup that each signal is on the pin its word bit is driven
+to (`pins::LAYOUT` in `src/pins.rs`) and that the window fits the PIO's five-bit pin
+fields (a wiring mistake stops startup rather than driving the wrong pins, since a
+runtime pin number cannot be checked by the type system). `src/driver.rs` programs
+`out_pins(pins.base(), …)` and `side_set_pin_base(pins.clock())`. The *word layout*
+is still the `interstate75` feature of `hub75-framebuffer`, which is per-board;
+base, wiring and layout are independent axes, and `LAYOUT` is the crate's copy of
+the layout's numbers, kept honest by the host test in `src/pins.rs` that draws
+pixels into a real framebuffer and checks which bits move.
 
-GP0–GP13 is the reference wiring and the examples' default. The base is 0 there,
-so nothing about the reference board changed; a non-zero base is exercised in M6.
+The clock is the one pin that is not a word bit: a side-set drives it, so it has a
+pin base of its own and may be the window's reserved pin (`pins::RESERVED`, where
+the word holds zero) or any pin outside the window — in which case the reserved pin
+is left unwired and out of `set_pindirs`. A clock on a signal pin is refused,
+because the side-set wins on an overlap and would overwrite that signal silently.
+
+GP0–GP13 is the reference wiring and the examples' default, the clock being GP11.
+The base is 0 there, so nothing about the reference board changed; a non-zero base
+is exercised in M6.
 
 ### A board is not a panel
 
@@ -65,7 +73,7 @@ window, the signal order, and the crystal.
 | `src/driver.rs` | `Hub75`, `Hub75Config`, `Hub75Pins`, `Hub75Swap`, `PioPin`, `on_dma_irq` |
 | `src/descriptor.rs` | the engine: the frame as a descriptor table a control channel plays into the data channel's `AL3` block |
 | `src/programs.rs` | the PIO stream program and the word↔pin layout |
-| `src/pins.rs` | the HUB75 signals as offsets in bus order, and the reference wiring's other pins |
+| `src/pins.rs` | the HUB75 word layout as data, the window's bounds, and the host test that pins the layout to `hub75-framebuffer` |
 | `examples/` | `gradient`, `telemetry`, `ghost`, `ladder` — every example goes through `Hub75` |
 | `NOTES.md` | measurements, datasheet facts, and the reasoning: the design record |
 | `plan.md` | milestones: what is done, in progress, and next |
@@ -96,14 +104,18 @@ lines: each one is shaped around the bare-metal target.
 There is no CI and no `.github/`. Whatever a change claims is verified, you ran.
 
 Hardware is the only judge of the panel. Host tests cover only what a file can be
-wrong about by itself — the clock divider, and the descriptor table `fill` and
-`patch` write. There are no tests for the stream program or for the drawing
-convention the examples use: the program is two PIO instructions, and the emulator
-that used to step it supplied its own state-machine configuration, so it could not
-have caught a driver that configured the machine differently; the colour
-arithmetic now lives in bare-metal examples, which cannot be host-tested at all.
-A change to the panel path in `src/programs.rs` or `src/driver.rs` is unverified
-until it is flashed; say so rather than implying otherwise.
+wrong about by itself — the clock divider, the descriptor table `fill` and `patch`
+write, and the pin checks `Hub75Pins::new` makes. The last of those includes
+`src/pins.rs`'s layout test, which draws pixels into a real `hub75-framebuffer`
+framebuffer and asserts which word bits move: that is what keeps `LAYOUT` from
+drifting away from the dependency it describes. There are no tests for the stream
+program or for the drawing convention the examples use: the program is two PIO
+instructions, and the emulator that used to step it supplied its own state-machine
+configuration, so it could not have caught a driver that configured the machine
+differently; the colour arithmetic now lives in bare-metal examples, which cannot be
+host-tested at all. A change to the panel path in `src/programs.rs` or
+`src/driver.rs` is unverified until it is flashed; say so rather than implying
+otherwise.
 
 ### Logging
 

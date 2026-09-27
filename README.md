@@ -27,7 +27,10 @@ loop {
 * A framebuffer word *is* the bus: with `hub75-framebuffer`'s `interstate75`
   layout, bit *n* is pin *n*, so one PIO `out pins, 14` drives the six colour
   bits, the row address, the latch and the output enable. No conversion pass —
-  see [`programs`](src/programs.rs).
+  see [`programs`](src/programs.rs). The clock is the exception: the PIO
+  generates it with a side-set, so it is the one pin specified apart from the
+  window (`Hub75Pins::new`'s last argument) and the one word bit
+  (`pins::RESERVED`) that carries no signal.
 * **Two channels and no CPU between frames.** The control channel plays a
   descriptor table — one entry per repetition of every segment, then a terminator
   — into the data channel's `AL3` register block, and the data channel chains back
@@ -141,6 +144,6 @@ ceiling: the ladder at a faster divider, and an analyser for the number.
 | `src/driver.rs` | `Hub75`, `Hub75Config`, `Hub75Pins`, `Hub75Swap`, `PioPin`, `on_dma_irq` |
 | `src/descriptor.rs` | the engine: the frame as a descriptor table — one entry a run, then the terminator that ends it — the swap's delta applied in place, and the `Hub75Descriptors` storage `hub75_descriptors!` allocates |
 | `src/programs.rs` | the PIO stream program and the word↔pin layout |
-| `src/pins.rs` | the HUB75 signals as offsets in bus order, and the reference board's other pins |
+| `src/pins.rs` | the HUB75 word layout as data, the pin window's bounds, and the host test that holds the layout to `hub75-framebuffer` |
 | `tools/` | MicroPython bring-up scripts, capture and GIF helpers |
 | `test-all.sh`, `build-all.sh`, `clippy-all.sh`, `fmt-all.sh` | host tests and the target builds |
