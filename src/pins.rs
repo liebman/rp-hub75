@@ -16,7 +16,7 @@
 //! | 12 | `STB`, the row latch |
 //! | 13 | `OE`, the output enable, active low |
 //!
-//! [`LAYOUT`] states that mapping as data, in the order [`crate::Hub75Pins::new`]
+//! [`LAYOUT`] states that mapping as data, in the order [`crate::Hub75Pins16::new`]
 //! takes the pins, and that constructor checks the wiring against it. The colours
 //! and the address are the *framebuffer's* — this crate never reads a pixel — so
 //! the values here are the contract between the two crates rather than an input
@@ -36,7 +36,7 @@
 //! here is also a GPIO number: `R0` is word bit 0 and GP0 at once. That is a
 //! property of that board's wiring, not of the bus. Another run of fourteen
 //! GPIOs uses these same offsets with a different base, which
-//! [`Hub75Pins::new`](crate::Hub75Pins::new) derives from the *lowest* pin it is
+//! [`Hub75Pins16::new`](crate::Hub75Pins16::new) derives from the *lowest* pin it is
 //! given; [`MAX_WORD_BASE`] is where such a window may start at the latest.
 //!
 //! ## The clock
@@ -45,7 +45,7 @@
 //! word: a side-set drives it, and the side-set has a pin base of its own
 //! (`SM_PINCTRL`'s `SIDESET_BASE`), independent of the `out` window. The pin it
 //! is wired to is therefore an argument of
-//! [`Hub75Pins::new`](crate::Hub75Pins::new) rather than a position in the bus
+//! [`Hub75Pins16::new`](crate::Hub75Pins16::new) rather than a position in the bus
 //! order, and it may be any PIO-reachable GPIO: the window pin at [`RESERVED`],
 //! where the framebuffer holds bit 11 at zero so the two writes agree, or a pin
 //! outside the window entirely, in which case the reserved pin is left unwired.
@@ -102,7 +102,7 @@ pub const ROW_E: u8 = 10;
 /// The other side of the same fact is that nothing else may be wired to this
 /// pin while the clock is not: `out pins, 14` writes the word's zero to it on
 /// every cycle. A clock wired elsewhere therefore leaves this pin unconnected
-/// and undriven, which [`crate::Hub75Pins::new`] accepts.
+/// and undriven, which [`crate::Hub75Pins16::new`] accepts.
 pub const RESERVED: u8 = 11;
 /// Strobe / latch, active high. Word bit 12.
 ///
@@ -117,7 +117,7 @@ pub const OE: u8 = 13;
 /// `out pins, 14`. See the `interstate75` layout in [`crate::programs`].
 pub const WORD_PINS: u8 = 14;
 
-/// Word bit that carries each bus signal, in the order [`crate::Hub75Pins::new`]
+/// Word bit that carries each bus signal, in the order [`crate::Hub75Pins16::new`]
 /// takes the pins: `R0 G0 B0 R1 G1 B1 A B C D E STB OE`.
 ///
 /// The clock is not in the list. The PIO generates it with a side-set rather
@@ -141,6 +141,207 @@ pub const MAX_PIN: u8 = 31;
 ///
 /// A window of [`WORD_PINS`] pins has to fit inside [`MAX_PIN`].
 pub const MAX_WORD_BASE: u8 = MAX_PIN - (WORD_PINS - 1);
+
+/// The **8-bit latched** bus: the word layout, the window it is streamed into,
+/// and the signals of an external latch circuit.
+///
+/// `hub75-framebuffer`'s `bitplane::latched` layouts store an 8-bit word per
+/// pixel, driven through an external latch circuit that holds the row address and
+/// gates the clock. The word carries no row address and has no reserved slot:
+///
+/// | word bit | signal |
+/// |---|---|
+/// | 0-2 | `R1 G1 B1`, the top half's colour |
+/// | 3-5 | `R2 G2 B2`, the bottom half's colour |
+/// | 6 | `LAT`, the row latch |
+/// | 7 | `OE`, the output enable, active low |
+///
+/// The row address rides apart from the pixel stream, in four trailing address
+/// bytes per row (see `hub75-framebuffer`), so the `out pins, 8` window is the
+/// six colour bits, the latch and the output enable, and nothing else. The clock
+/// is the one signal the PIO generates, and — there being no reserved bit to hide
+/// it in — it is wired outside the eight-pin window.
+///
+/// `LAYOUT` states the signal order as data, in the order
+/// [`crate::Hub75Pins8::new`] takes the pins, and that constructor checks the
+/// wiring against it. The offsets are offsets from the window's first pin, and
+/// each is also the word bit that carries the signal. The names come from
+/// `hub75-framebuffer`'s `bitplane::latched`, where `R1`/`R2` are the two
+/// sub-pixels' red bits.
+pub mod latched {
+    use super::MAX_PIN;
+
+    /// Red data, top half. Word bit 0.
+    pub const R1: u8 = 0;
+    /// Green data, top half. Word bit 1.
+    pub const G1: u8 = 1;
+    /// Blue data, top half. Word bit 2.
+    pub const B1: u8 = 2;
+    /// Red data, bottom half. Word bit 3.
+    pub const R2: u8 = 3;
+    /// Green data, bottom half. Word bit 4.
+    pub const G2: u8 = 4;
+    /// Blue data, bottom half. Word bit 5.
+    pub const B2: u8 = 5;
+    /// Row latch, active high. Word bit 6.
+    pub const LATCH: u8 = 6;
+    /// Output enable, active low. Word bit 7.
+    pub const OE: u8 = 7;
+
+    /// Pins a latched framebuffer word drives: one per bit, for PIO
+    /// `out pins, 8`.
+    pub const WORD_PINS: u8 = 8;
+
+    /// Word bit that carries each bus signal, in the order
+    /// [`crate::Hub75Pins8::new`] takes the pins: `R1 G1 B1 R2 G2 B2 LAT OE`.
+    ///
+    /// The clock is not in the list: the PIO generates it with a side-set, so its
+    /// pin is the constructor's own argument and there is no reserved slot for it
+    /// in the window.
+    pub const LAYOUT: [u8; 8] = [R1, G1, B1, R2, G2, B2, LATCH, OE];
+
+    /// Signals a latched framebuffer word carries: the length of `LAYOUT`.
+    pub const SIGNAL_COUNT: usize = LAYOUT.len();
+
+    /// Highest GPIO number the eight-pin window can start at: 24.
+    ///
+    /// A window of [`WORD_PINS`] pins has to fit inside [`MAX_PIN`].
+    pub const MAX_WORD_BASE: u8 = MAX_PIN - (WORD_PINS - 1);
+
+    #[cfg(test)]
+    mod tests {
+        use super::super::MAX_PIN;
+        use super::*;
+        use crate::framebuffer::Color;
+        use crate::framebuffer::FrameBuffer;
+        use crate::framebuffer::bitplane::latched::DmaFrameBuffer;
+        use embedded_graphics::geometry::Point;
+        use embedded_graphics::pixelcolor::RgbColor;
+
+        /// The framebuffer the tests draw on: 32 row pairs exercise all five
+        /// address bits.
+        type Fb = DmaFrameBuffer<32, 64, 6>;
+        const NROWS: usize = 32;
+        const COLS: usize = 64;
+        const PLANES: usize = 6;
+
+        /// One bit-plane's bytes, as the DMA streams them: `NROWS` rows, each
+        /// `COLS` data bytes then four address bytes (and any inter-row gap).
+        fn plane_bytes(fb: &Fb, plane: usize) -> &[u8] {
+            // The last segment covers exactly one plane, so its declared length
+            // is that plane's byte length — from the framebuffer's own sequence.
+            let len = Fb::BCM_SEQUENCE[PLANES - 1].len;
+            // SAFETY: `bcm_segment_ptr` points at that plane's storage inside the
+            // framebuffer, and `len` is the length the same crate declares for it.
+            unsafe { core::slice::from_raw_parts(fb.bcm_segment_ptr(plane), len) }
+        }
+
+        /// A row's stride in bytes: the plane's length over its rows.
+        fn row_stride() -> usize {
+            Fb::BCM_SEQUENCE[PLANES - 1].len / NROWS
+        }
+
+        /// The bits a drawn pixel sets are the ones `LAYOUT` names.
+        ///
+        /// The framebuffer is the authority for where a signal's word bit lives,
+        /// and the driver relies on this table agreeing with it — a disagreement
+        /// would swap the panel's colours with no error anywhere.
+        #[test]
+        fn the_colour_bits_are_the_ones_the_framebuffer_drives() {
+            let cases: [(i32, i32, Color, u8); 6] = [
+                (1, 1, Color::RED, R1),
+                (2, 1, Color::GREEN, G1),
+                (3, 1, Color::BLUE, B1),
+                (1, NROWS as i32 + 1, Color::RED, R2),
+                (2, NROWS as i32 + 1, Color::GREEN, G2),
+                (3, NROWS as i32 + 1, Color::BLUE, B2),
+            ];
+            let blank = Fb::new();
+            for (x, y, color, bit) in cases {
+                let mut drawn = Fb::new();
+                drawn.set_pixel(Point::new(x, y), color);
+
+                for plane in 0..PLANES {
+                    let mut changed = 0;
+                    let mut bits = 0u8;
+                    for (blank_byte, drawn_byte) in plane_bytes(&blank, plane)
+                        .iter()
+                        .zip(plane_bytes(&drawn, plane))
+                    {
+                        let delta = blank_byte ^ drawn_byte;
+                        if delta != 0 {
+                            changed += 1;
+                            bits |= delta;
+                        }
+                    }
+                    // One pixel is one byte per plane, and the bit it set is the
+                    // signal's.
+                    assert_eq!(changed, 1, "one byte per plane carries one pixel");
+                    assert_eq!(
+                        bits,
+                        1 << bit,
+                        "word bit {bit} is not the one a drawn {color:?} sets",
+                    );
+                }
+            }
+        }
+
+        /// The latch is the word bit `LAYOUT` names, and the row address is the
+        /// low five bits of the trailing address bytes — not a signal in the
+        /// pixel word. The output-enable bit is left unasserted: its level is the
+        /// framebuffer's and flips under `invert-oe`.
+        #[test]
+        fn the_latch_and_address_are_where_the_layout_says() {
+            let fb = Fb::new();
+            let bytes = plane_bytes(&fb, 0);
+            let stride = row_stride();
+
+            for slot in 0..NROWS {
+                // A row is `COLS` data bytes, then four address bytes.
+                let addr = &bytes[slot * stride + COLS..slot * stride + COLS + 4];
+                // The latch (bit 6) is asserted on the first two address words
+                // and clear on the last two.
+                assert_eq!(addr[0] & (1 << LATCH), 1 << LATCH, "row {slot} byte 0");
+                assert_eq!(addr[1] & (1 << LATCH), 1 << LATCH, "row {slot} byte 1");
+                assert_eq!(addr[2] & (1 << LATCH), 0, "row {slot} byte 2");
+                assert_eq!(addr[3] & (1 << LATCH), 0, "row {slot} byte 3");
+                // The row address is the low five bits of the address words, and
+                // is this row's.
+                assert_eq!(addr[0] & 0x1f, slot as u8, "row {slot} address");
+                assert_eq!(addr[2] & 0x1f, slot as u8, "row {slot} address");
+            }
+
+            // The latch is not asserted in the pixel word: only the trailing
+            // address words carry it.
+            for slot in 0..NROWS {
+                for col in 0..COLS {
+                    let word = bytes[slot * stride + col];
+                    assert_eq!(
+                        word & (1 << LATCH),
+                        0,
+                        "data word {slot}:{col} asserts the latch"
+                    );
+                }
+            }
+
+            // The window fits the PIO's five-bit pin fields.
+            assert_eq!(MAX_WORD_BASE, MAX_PIN - (WORD_PINS - 1));
+        }
+
+        /// The default layout drives the output-enable bit (GP9 here) high while a
+        /// row is lit and low for the four address words; `invert-oe` flips both.
+        /// Either way it is the word bit `LAYOUT` names.
+        #[test]
+        fn the_output_enable_bit_is_the_one_the_layout_names() {
+            let fb = Fb::new();
+            let bytes = plane_bytes(&fb, 0);
+            let oe = 1u8 << OE;
+            let active = if cfg!(feature = "invert-oe") { 0 } else { oe };
+            assert_eq!(bytes[0] & oe, active, "the lit-phase OE level");
+            assert_eq!(bytes[COLS] & oe, (!active) & oe, "the address words blank");
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

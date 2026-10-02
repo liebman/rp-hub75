@@ -54,12 +54,31 @@ use hub75_framebuffer::BcmLenReps;
 use hub75_framebuffer::FrameBuffer;
 use hub75_framebuffer::bcm_rep_count;
 
-/// Bytes in a framebuffer word.
+/// A framebuffer word: its width in bytes, and the DMA transfer size it takes.
 ///
-/// The driver is constrained to `FrameBuffer<Word = u16>`, so the word width
-/// appears here and in the data channel's `DATA_SIZE` and nowhere else; an 8-bit
-/// latched layout would change this, the PIO program, and that field.
-pub const WORD_BYTES: usize = 2;
+/// The word width is a property of the *framebuffer* — `u16` for the
+/// direct-drive layouts whose word is the whole bus, `u8` for the latched ones —
+/// and it decides two things that must agree: how many bytes are one word (the
+/// descriptor's `TRANS_COUNT` counts words, not bytes), and the data channel's
+/// `DATA_SIZE`. Implementing this trait for a word type is what lets the engine
+/// be written once for every layout.
+pub trait BusWord {
+    /// Bytes in one word.
+    const BYTES: usize;
+    /// `log2` of [`BYTES`](Self::BYTES): the value the DMA `DATA_SIZE` field
+    /// takes (0 = byte, 1 = halfword, 2 = word).
+    const DATA_SIZE_LOG2: u8;
+}
+
+impl BusWord for u8 {
+    const BYTES: usize = 1;
+    const DATA_SIZE_LOG2: u8 = 0;
+}
+
+impl BusWord for u16 {
+    const BYTES: usize = 2;
+    const DATA_SIZE_LOG2: u8 = 1;
+}
 
 /// Largest `TRANS_COUNT` RP2350 can hold: 28 bits, the top four being `MODE`.
 pub const MAX_TRANSFER_WORDS: u32 = (1 << 28) - 1;
@@ -195,13 +214,17 @@ impl Descriptor {
 /// does not split a segment across descriptors — or if `entries` cannot hold the
 /// frame.
 #[must_use]
-pub fn fill<FB: FrameBuffer<Word = u16>>(fb: &FB, entries: &mut [Descriptor]) -> usize {
+pub fn fill<FB>(fb: &FB, entries: &mut [Descriptor]) -> usize
+where
+    FB: FrameBuffer,
+    FB::Word: BusWord,
+{
     let segments = fb.bcm_segment_count();
     assert!(segments > 0, "the framebuffer's BCM sequence is empty");
     let mut runs = 0;
     for index in 0..segments {
         let BcmLenReps { len, reps } = FB::BCM_SEQUENCE[index % FB::BCM_SEQUENCE_LEN];
-        let trans_count = (len / WORD_BYTES) as u32;
+        let trans_count = (len / <FB::Word as BusWord>::BYTES) as u32;
         assert!(
             trans_count > 0,
             "a {len}-byte segment is zero words, which would end the frame early"
@@ -319,7 +342,9 @@ mod tests {
                     "run {index} starts before the framebuffer"
                 );
                 assert!(
-                    descriptor.read_addr + descriptor.trans_count * WORD_BYTES as u32 <= end,
+                    descriptor.read_addr
+                        + descriptor.trans_count * <FB::Word as BusWord>::BYTES as u32
+                        <= end,
                     "run {index} runs past the end of the framebuffer"
                 );
             }

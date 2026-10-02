@@ -1,9 +1,18 @@
 //! PIO programs the driver runs against the panel.
 //!
-//! **One state machine** streams a `hub75-framebuffer` bitplane buffer straight
-//! at the panel's fourteen signals. Nothing touches the HUB75 pins while that
-//! runs: no per-column CPU work, and no conversion pass — the words in the
-//! framebuffer *are* the pin levels the panel receives.
+//! **One state machine** streams a `hub75-framebuffer` buffer straight at the
+//! panel's pins. Nothing touches the HUB75 pins while that runs: no per-column
+//! CPU work, and no conversion pass — the words in the framebuffer *are* the pin
+//! levels the panel receives. Two programs are provided, and the framebuffer's
+//! word width picks between them:
+//!
+//! * [`hub75_stream16`] shifts a 16-bit word into the fourteen-signal
+//!   direct-drive bus (the `interstate75` layout) with `out pins, 14`.
+//! * [`hub75_stream8`] shifts an 8-bit word into an eight-signal latched bus
+//!   (the `bitplane::latched` layouts) with `out pins, 8`.
+//!
+//! A [`Stream`] carries the assembled program and the window width it writes, so
+//! the two cannot drift apart.
 //!
 //! # One state machine, because a word is already in pin order
 //!
@@ -52,11 +61,12 @@
 //!
 //! # The one invariant
 //!
-//! **One FIFO word per column.** `pull_threshold` is [`PULL_THRESHOLD`], the
-//! fourteen bits one `out pins, 14` shifts out, so the OSR refills exactly on a
-//! column boundary and the word's fields cannot drift. Sixteen would leave the
-//! word's two spare top bits in the OSR and put every following word two bits out
-//! of place, which is the M2b confetti in a new costume.
+//! **One FIFO word per column.** `pull_threshold` is the stream's window width
+//! ([`Stream::threshold`]), the bits one `out pins, N` shifts out, so the OSR
+//! refills exactly on a column boundary and the word's fields cannot drift.
+//! Sixteen would leave a 14-bit word's two spare top bits in the OSR and put
+//! every following word two bits out of place, which is the M2b confetti in a new
+//! costume.
 //!
 //! # The one hair: the reserved bit
 //!
@@ -75,7 +85,7 @@
 //! overlapping region"* — so the corruption of that pin would be silent rather
 //! than an error. `.side_set 1` against `side_set_pin_base(clock)` in
 //! [`crate::driver`] is what keeps the window to one bit, and
-//! [`crate::Hub75Pins::new`] refuses any clock pin inside the window other than
+//! [`crate::Hub75Pins16::new`] refuses any clock pin inside the window other than
 //! [`pins::RESERVED`].
 //!
 //! # The latch
@@ -98,22 +108,50 @@
 use crate::pins;
 use pio::{Program, RP2040_MAX_PROGRAM_SIZE};
 
-/// `pull_threshold` for the stream program: the fourteen bits of the word that
-/// one `out pins, 14` shifts out. See the module docs — this is what keeps one
-/// FIFO word per column, and why it is not the whole 16-bit word.
-pub const PULL_THRESHOLD: u8 = pins::WORD_PINS;
-
 /// PIO cycles a word costs: the word and the clock edge, in either clock
 /// polarity.
 pub const CYCLES_PER_WORD: u32 = 2;
 
-/// The stream program: one framebuffer word per panel column, straight out to
-/// the fourteen pins of the HUB75 window, with the panel clock on a pin the
-/// side-set drives.
+/// A stream program together with the window width it writes.
 ///
-/// Configure the state machine with `out_pins(base, WORD_PINS)`,
+/// The program and the `out pins, N` window are one decision — a program that
+/// shifts fourteen bits into an eight-pin window drives the wrong pins — so they
+/// travel together and the driver reads both from one place rather than keeping
+/// two lists in step.
+pub struct Stream {
+    program: Program<{ RP2040_MAX_PROGRAM_SIZE }>,
+    window: u8,
+}
+
+impl Stream {
+    /// The assembled program, for the HAL's `PIOExt::install`.
+    pub fn program(&self) -> &Program<{ RP2040_MAX_PROGRAM_SIZE }> {
+        &self.program
+    }
+
+    /// The pins one `out pins, N` writes: the framebuffer word's width. The
+    /// window's lowest pin is the base the pin set derives from the pins it is
+    /// given.
+    pub fn window(&self) -> u8 {
+        self.window
+    }
+
+    /// `pull_threshold` to configure the state machine with: the word's own
+    /// bits, so the OSR refills on a column boundary. Equal to
+    /// [`window`](Self::window); see the module docs for why it is not 16.
+    pub fn threshold(&self) -> u8 {
+        self.window
+    }
+}
+
+/// The 16-bit stream program: one `out pins, 14` per column, straight out to
+/// the fourteen pins of a direct-drive HUB75 window.
+///
+/// This is the program for the `hub75-framebuffer` layouts whose word *is* the
+/// fourteen-signal bus (the `interstate75` layout, [`crate::pins::LAYOUT`]).
+/// Configure the state machine with `out_pins(base, stream.window())`,
 /// `side_set_pin_base(clock)`, `autopull(true)`,
-/// `pull_threshold(PULL_THRESHOLD)` and
+/// `pull_threshold(stream.threshold())` and
 /// `out_shift_direction(ShiftDirection::Right)` — the words are handed out
 /// least-significant bit first, and `Left` reverses every word, which turns the
 /// picture into noise. Then `set_pindirs` the thirteen signal pins and the clock
@@ -124,13 +162,40 @@ pub const CYCLES_PER_WORD: u32 = 2;
 /// at its idle level, so the panel gets a full cycle of setup before the edge it
 /// samples. A panel that wants the falling edge gets it from the clock pin's
 /// output override rather than from a second program — see [`crate::driver`].
-pub fn hub75_stream() -> Program<{ RP2040_MAX_PROGRAM_SIZE }> {
-    pio::pio_asm!(
-        ".side_set 1",
-        ".wrap_target",
-        "    out pins, 14     side 0   ; the word -> the window, clock low",
-        "    nop              side 1   ; the clock's edge: the panel shifts this column in",
-        ".wrap",
-    )
-    .program
+pub fn hub75_stream16() -> Stream {
+    Stream {
+        program: pio::pio_asm!(
+            ".side_set 1",
+            ".wrap_target",
+            "    out pins, 14     side 0   ; the word -> the window, clock low",
+            "    nop              side 1   ; the clock's edge: the panel shifts this column in",
+            ".wrap",
+        )
+        .program,
+        window: pins::WORD_PINS,
+    }
+}
+
+/// The 8-bit stream program: one `out pins, 8` per column, for an 8-bit latched
+/// HUB75 window.
+///
+/// This is the program for the `hub75-framebuffer` latched layouts
+/// ([`crate::pins::latched`]), whose word is eight signals — the two sub-pixels'
+/// colour, the latch and the output enable — driven through an external latch
+/// circuit that gates the clock. Configure and start the state machine exactly
+/// as [`hub75_stream16`] describes, with `out_pins(base, stream.window())`; the
+/// clock is the side-set pin and, the 8-bit window having no reserved slot, is
+/// wired outside it.
+pub fn hub75_stream8() -> Stream {
+    Stream {
+        program: pio::pio_asm!(
+            ".side_set 1",
+            ".wrap_target",
+            "    out pins, 8      side 0   ; the word -> the window, clock low",
+            "    nop              side 1   ; the clock's edge: the panel shifts this column in",
+            ".wrap",
+        )
+        .program,
+        window: pins::latched::WORD_PINS,
+    }
 }

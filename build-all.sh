@@ -3,9 +3,10 @@ set -e
 
 # Build the rp-hub75 library and its examples for the RP2350 (Cortex-M33).
 #
-# The library is built once per library feature combination: `invert-clock` and
-# `invert-oe` select code paths in the library itself. The examples go through
-# `Hub75` and name no polarity, so they are built once.
+# The `build-rp2350` alias names the board's config file and features (no feature is
+# a default). The library is built once per library feature combination:
+# `invert-clock` and `invert-oe` select code paths in the library itself. The
+# examples go through `Hub75` and name no polarity, so they are built once.
 #
 # `20mhz` is an example feature — it sets the rate the examples ask for through
 # `cfg!`, which compiles both arms in every build — so it is not part of the loop.
@@ -18,15 +19,15 @@ for features in "" "invert-clock" "invert-oe" "invert-clock,invert-oe"; do
         extra=()
     fi
     echo "=========================================="
-    echo "Building (library): cargo build-arm ${extra[*]}"
+    echo "Building (library): cargo build-rp2350 ${extra[*]}"
     echo "=========================================="
-    cargo build-arm "${extra[@]}"
+    cargo build-rp2350 "${extra[@]}"
 done
 
 echo "=========================================="
-echo "Building (examples): cargo build-arm --examples"
+echo "Building (examples): cargo build-rp2350 --examples"
 echo "=========================================="
-cargo build-arm --examples
+cargo build-rp2350 --examples
 
 echo "=========================================="
 echo "All builds succeeded!"

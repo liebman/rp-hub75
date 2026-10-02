@@ -68,12 +68,13 @@
 use core::cell::Cell;
 use core::cell::RefCell;
 use core::marker::PhantomData;
-use core::sync::atomic::AtomicBool;
-use core::sync::atomic::Ordering;
 use core::task::Waker;
 
+use portable_atomic::AtomicBool;
+use portable_atomic::Ordering;
+
+use crate::hal;
 use critical_section::Mutex;
-use rp235x_hal as hal;
 
 use hal::dma::SingleChannel;
 use hal::fugit::Rate;
@@ -92,16 +93,15 @@ use hal::pio::PinDir;
 use hal::pio::ShiftDirection;
 use hub75_framebuffer::FrameBuffer;
 
+use crate::descriptor::BusWord;
 use crate::descriptor::DESCRIPTOR_WORDS;
 use crate::descriptor::Descriptor;
 use crate::descriptor::Hub75Descriptors;
 use crate::descriptor::descriptor_count;
 use crate::pins;
-use crate::programs::PULL_THRESHOLD;
-use crate::programs::hub75_stream;
-
-/// `log2` of the data channel's transfer size: 16-bit framebuffer words.
-const DATA_SIZE_HALFWORD: u8 = 1;
+use crate::programs::Stream;
+use crate::programs::hub75_stream8;
+use crate::programs::hub75_stream16;
 
 /// `log2` of the control channel's transfer size: 32-bit descriptor words.
 const DATA_SIZE_WORD: u8 = 2;
@@ -148,7 +148,7 @@ pub const PIN_COUNT: usize = pins::WORD_PINS as usize;
 /// Signals a framebuffer word carries, in bus order.
 pub const SIGNAL_COUNT: usize = pins::SIGNAL_COUNT;
 
-/// Signal names, in the order [`Hub75Pins::new`] takes the pins, for the
+/// Signal names, in the order [`Hub75Pins16::new`] takes the pins, for the
 /// messages [`check_bus`] panics with.
 const SIGNAL_NAMES: [&str; SIGNAL_COUNT] = [
     "R0", "G0", "B0", "R1", "G1", "B1", "A", "B", "C", "D", "E", "STB", "OE",
@@ -156,7 +156,7 @@ const SIGNAL_NAMES: [&str; SIGNAL_COUNT] = [
 
 /// A GPIO the PIO can drive.
 ///
-/// [`Hub75Pins::new`] takes the bus pins as concrete types, so this bound is
+/// [`Hub75Pins16::new`] takes the bus pins as concrete types, so this bound is
 /// what makes handing over a pin the PIO cannot reach a compile error. The pins'
 /// GPIO *numbers* are checked at startup instead: each signal must sit on the
 /// window pin its word bit is shifted to, and the whole window must fit the
@@ -227,6 +227,66 @@ fn check_bus(numbers: &[u8; SIGNAL_COUNT], clock: u8) {
          precedence over the word on that pin, so it would overwrite the signal \
          there on every cycle. Wire the clock to pin {reserved} — where the \
          framebuffer word holds zero — or to a pin outside the window"
+    );
+}
+
+/// Signals the 8-bit latched bus carries.
+pub const SIGNAL_COUNT8: usize = pins::latched::SIGNAL_COUNT;
+
+/// Signal names for the 8-bit bus, in the order [`Hub75Pins8::new`] takes the
+/// pins, for the messages [`check_bus8`] panics with.
+const SIGNAL_NAMES8: [&str; SIGNAL_COUNT8] = ["R1", "G1", "B1", "R2", "G2", "B2", "LAT", "OE"];
+
+/// Checks an 8-bit latched bus-order pin list, as [`check_bus`] does for the
+/// 16-bit bus.
+///
+/// The window is eight consecutive GPIOs and `out pins, 8` writes
+/// `[base, base + 7]`, so each signal must be on `base + LAYOUT8[i]`. The clock
+/// is checked apart: the 8-bit window has no reserved slot, so the clock must be
+/// wired outside it.
+///
+/// # Panics
+///
+/// Panics if a signal is not on the window pin its word bit is driven to, if the
+/// window does not fit the PIO's five-bit pin fields — a base above
+/// [`pins::latched::MAX_WORD_BASE`] — if the clock is inside the window, or if it
+/// is not a pin the PIO can address.
+fn check_bus8(numbers: &[u8; SIGNAL_COUNT8], clock: u8) {
+    let base = *numbers
+        .iter()
+        .min()
+        .expect("a bus has signals, so it has a lowest pin");
+    for (index, &number) in numbers.iter().enumerate() {
+        let expected = base + pins::latched::LAYOUT[index];
+        assert_eq!(
+            number,
+            expected,
+            "{} is wired to pin {number}, but framebuffer word bit {} is driven \
+             to pin {expected} of the window starting at {base}: the signal is \
+             on the wrong pin",
+            SIGNAL_NAMES8[index],
+            pins::latched::LAYOUT[index],
+        );
+    }
+    assert!(
+        base <= pins::latched::MAX_WORD_BASE,
+        "an {SIGNAL_COUNT8}-pin window cannot start at {base}: the PIO's pin \
+         fields are five bits, so it must start at {} or lower",
+        pins::latched::MAX_WORD_BASE
+    );
+    assert!(
+        clock <= pins::MAX_PIN,
+        "the clock is on pin {clock}, which the PIO cannot address: its pin \
+         fields are five bits, so the clock must be on pin {} or lower",
+        pins::MAX_PIN
+    );
+    let top = base + (pins::latched::WORD_PINS - 1);
+    assert!(
+        clock < base || clock > top,
+        "the clock is on pin {clock}, which is inside the window starting at \
+         {base}: the 8-bit window has no reserved slot, so the side-set would \
+         overwrite a signal on that pin on every cycle. Wire the clock outside \
+         the window"
     );
 }
 
@@ -305,7 +365,41 @@ pub enum Hub75Error {
 // Pins
 // ---------------------------------------------------------------------------
 
-/// The HUB75 pins, converted and owned by the driver.
+/// A HUB75 bus the driver can stream: the framebuffer word it carries and the
+/// program that drives it.
+///
+/// A [`Hub75`] is generic over its pin set and requires the set's
+/// [`Word`](Self::Word) to equal the framebuffer's, so 8-bit pins with a 16-bit
+/// framebuffer is a compile error rather than a scrambled picture. The pin set
+/// also decides the program and the window width, which is what keeps `out pins,
+/// N` and the word width in step.
+pub trait Hub75Pins: 'static {
+    /// The framebuffer word width this bus carries.
+    type Word: BusWord;
+
+    /// The stream program and the window width it writes.
+    fn stream() -> Stream;
+
+    /// The GPIO number the window's first pin is on.
+    fn base(&self) -> u8;
+
+    /// The GPIO number the panel clock is wired to.
+    fn clock(&self) -> u8;
+
+    /// The window's signal pins, in bus order.
+    fn signal_pins(&self) -> impl Iterator<Item = u8> + '_;
+
+    /// Inverts the clock pin's output in the GPIO block.
+    ///
+    /// A panel that takes the column on the clock's falling edge gets it here,
+    /// not from a second program: the pad inverts whatever the PIO drives on that
+    /// pin, and both the side-set and the word agree where they overlap.
+    #[cfg(feature = "invert-clock")]
+    fn invert_clock(&mut self);
+}
+
+/// The HUB75 pins of a **16-bit direct-drive** bus, converted and owned by the
+/// driver.
 ///
 /// The constructor takes the thirteen signals in bus order — `R0 G0 B0 R1 G1 B1
 /// A B C D E STB OE` — and the clock separately, because the clock is the one
@@ -314,7 +408,7 @@ pub enum Hub75Error {
 /// bit is driven to, and that the clock is either that window's reserved pin or
 /// a pin outside it. The handles are kept so nothing else can claim the bus.
 /// `Pins::new` yields pins in `FunctionNull`; this does the `into_function` step.
-pub struct Hub75Pins {
+pub struct Hub75Pins16 {
     /// The GPIO number the fourteen-pin window starts at.
     base: u8,
     /// The window's signal pins, in bus order.
@@ -323,7 +417,22 @@ pub struct Hub75Pins {
     clock: hal::gpio::Pin<DynPinId, FunctionPio0, PullNone>,
 }
 
-impl Hub75Pins {
+/// The HUB75 pins of an **8-bit latched** bus, converted and owned by the driver.
+///
+/// The constructor takes the eight signals in bus order — `R1 G1 B1 R2 G2 B2 LAT
+/// OE` — and the clock separately. An 8-bit window has no reserved slot, so the
+/// clock must be wired outside it. The handles are kept so nothing else can claim
+/// the bus.
+pub struct Hub75Pins8 {
+    /// The GPIO number the eight-pin window starts at.
+    base: u8,
+    /// The window's signal pins, in bus order.
+    hold: [hal::gpio::Pin<DynPinId, FunctionPio0, PullNone>; SIGNAL_COUNT8],
+    /// The panel clock, wherever it is wired.
+    clock: hal::gpio::Pin<DynPinId, FunctionPio0, PullNone>,
+}
+
+impl Hub75Pins16 {
     /// Converts the panel's pins to an owned pin set.
     ///
     /// The order is the HUB75 bus: top half (`R0 G0 B0`), bottom half
@@ -410,13 +519,32 @@ impl Hub75Pins {
         Self { base, hold, clock }
     }
 
-    /// Inverts the clock pin's output in the GPIO block.
-    ///
-    /// A panel that takes the column on the clock's falling edge gets it here, not
-    /// from a second program: the pad inverts whatever the PIO drives on that pin —
-    /// the side-set, and the word's own reserved bit where the clock occupies it —
-    /// and both write zero on the cycle the word changes, so the two agree and the
-    /// whole bus stays in step with the clock.
+    /// The GPIO number of window pin `index`: the signal [`pins::LAYOUT`] places
+    /// there.
+    fn window_pin(&self, index: usize) -> u8 {
+        self.hold[index].id().num
+    }
+}
+
+impl Hub75Pins for Hub75Pins16 {
+    type Word = u16;
+
+    fn stream() -> Stream {
+        hub75_stream16()
+    }
+
+    fn base(&self) -> u8 {
+        self.base
+    }
+
+    fn clock(&self) -> u8 {
+        self.clock.id().num
+    }
+
+    fn signal_pins(&self) -> impl Iterator<Item = u8> + '_ {
+        (0..SIGNAL_COUNT).map(|index| self.window_pin(index))
+    }
+
     #[cfg(feature = "invert-clock")]
     fn invert_clock(&mut self) {
         debug_assert!(
@@ -425,27 +553,109 @@ impl Hub75Pins {
         );
         self.clock.set_output_override(OutputOverride::Invert);
     }
+}
 
-    /// The GPIO number of window pin `index`: the signal [`pins::LAYOUT`] places
-    /// there.
+impl Hub75Pins8 {
+    /// Converts the panel's pins to an owned pin set.
+    ///
+    /// The order is the 8-bit latched bus: `R1 G1 B1 R2 G2 B2 LAT OE`. The clock
+    /// is the last argument and must be a GPIO the PIO can drive **outside** the
+    /// eight-pin window: the window has no reserved slot, so a clock inside it
+    /// would be a signal the side-set overwrites on every cycle. The lowest signal
+    /// pin is the window's base, which [`Hub75Pins::base`] reports. See
+    /// [`crate::pins::latched`] for the offsets this order is made of, and
+    /// `LAYOUT` there for the word bit each one carries.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a signal is not on the window pin its word bit is driven to, if
+    /// the window does not fit the PIO's five-bit pin fields, or if the clock is
+    /// inside the window or not a pin the PIO can address.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new<I0, I1, I2, I3, I4, I5, I6, I7, I8, P>(
+        r1: hal::gpio::Pin<I0, FunctionNull, P>,
+        g1: hal::gpio::Pin<I1, FunctionNull, P>,
+        b1: hal::gpio::Pin<I2, FunctionNull, P>,
+        r2: hal::gpio::Pin<I3, FunctionNull, P>,
+        g2: hal::gpio::Pin<I4, FunctionNull, P>,
+        b2: hal::gpio::Pin<I5, FunctionNull, P>,
+        lat: hal::gpio::Pin<I6, FunctionNull, P>,
+        oe: hal::gpio::Pin<I7, FunctionNull, P>,
+        clk: hal::gpio::Pin<I8, FunctionNull, P>,
+    ) -> Self
+    where
+        I0: PioPin,
+        I1: PioPin,
+        I2: PioPin,
+        I3: PioPin,
+        I4: PioPin,
+        I5: PioPin,
+        I6: PioPin,
+        I7: PioPin,
+        I8: PioPin,
+        P: PullType,
+    {
+        // The panel pins are outputs, so their pull setting is irrelevant; it is
+        // normalized away so the driver does not need a type parameter for it.
+        fn hold<I: PioPin, P: PullType>(
+            pin: hal::gpio::Pin<I, FunctionNull, P>,
+        ) -> hal::gpio::Pin<DynPinId, FunctionPio0, PullNone> {
+            let pin: hal::gpio::Pin<I, FunctionPio0, PullNone> =
+                pin.into_pull_type::<PullNone>().into_function();
+            pin.into_dyn_pin()
+        }
+        let clock = hold(clk);
+        let hold = [
+            hold(r1),
+            hold(g1),
+            hold(b1),
+            hold(r2),
+            hold(g2),
+            hold(b2),
+            hold(lat),
+            hold(oe),
+        ];
+        let numbers: [u8; SIGNAL_COUNT8] = core::array::from_fn(|index| hold[index].id().num);
+        // Checked here, so a mis-wired bus stops startup; the base the check
+        // derives is stored rather than recomputed.
+        check_bus8(&numbers, clock.id().num);
+        let base = *numbers
+            .iter()
+            .min()
+            .expect("a bus has signals, so it has a lowest pin");
+        Self { base, hold, clock }
+    }
+
+    /// The GPIO number of window pin `index`: the signal
+    /// [`pins::latched::LAYOUT`] places there.
     fn window_pin(&self, index: usize) -> u8 {
         self.hold[index].id().num
     }
+}
 
-    /// The GPIO number the fourteen-pin window starts at.
-    ///
-    /// The lowest signal pin [`new`](Self::new) was given — `R0`'s, on the
-    /// reference wiring — which `out pins, 14` writes through `base + 13`.
-    pub fn base(&self) -> u8 {
+impl Hub75Pins for Hub75Pins8 {
+    type Word = u8;
+
+    fn stream() -> Stream {
+        hub75_stream8()
+    }
+
+    fn base(&self) -> u8 {
         self.base
     }
 
-    /// The GPIO number the panel clock is wired to.
-    ///
-    /// [`base`](Self::base) plus [`pins::RESERVED`] on the reference wiring, or a
-    /// pin outside the window.
-    pub fn clock(&self) -> u8 {
+    fn clock(&self) -> u8 {
         self.clock.id().num
+    }
+
+    fn signal_pins(&self) -> impl Iterator<Item = u8> + '_ {
+        (0..SIGNAL_COUNT8).map(|index| self.window_pin(index))
+    }
+
+    #[cfg(feature = "invert-clock")]
+    fn invert_clock(&mut self) {
+        debug_assert!(self.clock() > self.base + (pins::latched::WORD_PINS - 1));
+        self.clock.set_output_override(OutputOverride::Invert);
     }
 }
 
@@ -562,12 +772,18 @@ static SWAP_DONE: AtomicBool = AtomicBool::new(false);
 /// Set once a driver exists.
 static DRIVER_TAKEN: AtomicBool = AtomicBool::new(false);
 
-/// The interrupt line index (0-3) for a `DMA_IRQ_n`.
+/// The interrupt line index for a `DMA_IRQ_n`.
+///
+/// The RP2350 has four DMA interrupt lines and the RP2040 two, so lines 2 and 3
+/// exist only in the `rp2350` build; an application cannot name them on the
+/// RP2040.
 fn line_index(irq: pac::Interrupt) -> Option<u8> {
     match irq {
         pac::Interrupt::DMA_IRQ_0 => Some(0),
         pac::Interrupt::DMA_IRQ_1 => Some(1),
+        #[cfg(feature = "rp2350")]
         pac::Interrupt::DMA_IRQ_2 => Some(2),
+        #[cfg(feature = "rp2350")]
         pac::Interrupt::DMA_IRQ_3 => Some(3),
         _ => None,
     }
@@ -658,16 +874,19 @@ pub fn on_dma_irq() {
 ///
 /// Written once, and never touched again — every descriptor the control channel
 /// plays rewrites `READ_ADDR` and `TRANS_COUNT`, and nothing rewrites `CTRL`.
-/// `control` is the channel that this one chains to when a run completes, and
-/// `IRQ_QUIET` is set so the end of a run does **not** interrupt: the only
-/// interrupt a frame raises is the table's terminator. (A channel that chains to
-/// itself does not chain; the reset value 0 would hand every completion to
-/// channel 0 instead.)
+/// `data_size_log2` is the framebuffer word's `DATA_SIZE` (0 = byte, 1 =
+/// halfword), which the pin set's `Word` decides: an 8-bit latched word is one
+/// byte, a 16-bit direct-drive word a halfword. `control` is the channel that
+/// this one chains to when a run completes, and `IRQ_QUIET` is set so the end of
+/// a run does **not** interrupt: the only interrupt a frame raises is the table's
+/// terminator. (A channel that chains to itself does not chain; the reset value 0
+/// would hand every completion to channel 0 instead.)
 fn new_data_channel<CH: SingleChannel, CCH: SingleChannel>(
     channel: &CH,
     control: &CCH,
     fifo: u32,
     dreq: u8,
+    data_size_log2: u8,
 ) {
     // SAFETY: the channel belongs to this driver from here on, and these writes
     // are the only configuration it ever gets.
@@ -675,10 +894,10 @@ fn new_data_channel<CH: SingleChannel, CCH: SingleChannel>(
         let ch = channel.ch();
         ch.ch_write_addr().write(|w| w.bits(fifo));
         // `CTRL` through the alias whose trigger is `TRANS_COUNT`, so this
-        // configures without starting anything: 16-bit words, walk the read
-        // address, no ring, paced by the state machine.
+        // configures without starting anything: the framebuffer's word size,
+        // walk the read address, no ring, paced by the state machine.
         ch.ch_al1_ctrl().write(|w| {
-            w.data_size().bits(DATA_SIZE_HALFWORD);
+            w.data_size().bits(data_size_log2);
             w.incr_read().set_bit();
             w.incr_write().clear_bit();
             w.ring_sel().clear_bit();
@@ -727,27 +946,46 @@ fn new_control_channel<CH: SingleChannel>(channel: &CH, target: u32) {
     }
 }
 
-/// Enables this channel's completion on one of the four DMA interrupt lines.
+/// Enables this channel's completion on one of the DMA interrupt lines.
 ///
-/// The `INTEn` registers are four distinct types in the PAC, so this routes by
-/// address and sets one bit.
+/// The `INTEn` registers are distinct types in the PAC, so this routes by address
+/// and sets one bit. The RP2350 has four lines and the RP2040 two; [`line_index`]
+/// only ever returns a line this match handles.
 fn arm(flag: u32, line: u8) {
     let dma = unsafe { &*pac::DMA::ptr() };
     let register = match line {
         0 => dma.inte0().as_ptr(),
         1 => dma.inte1().as_ptr(),
+        #[cfg(feature = "rp2350")]
         2 => dma.inte2().as_ptr(),
-        _ => dma.inte3().as_ptr(),
+        #[cfg(feature = "rp2350")]
+        3 => dma.inte3().as_ptr(),
+        _ => unreachable!("a DMA interrupt line is 0 to 3"),
     };
     // SAFETY: one of the DMA's interrupt-enable registers, read-modify-written
     // once at init.
     unsafe { register.write_volatile(register.read_volatile() | flag) };
 }
 
+/// Unmasks the DMA interrupt line the driver watches.
+///
+/// Arm only: the host, where the library's unit tests run, has no NVIC and runs
+/// no panel, so there the call is a no-op that only has to type-check. On both
+/// the RP2040 and the RP2350 the PAC's `Interrupt` implements `InterruptNumber`,
+/// which is why the call is the same on both.
+#[cfg(target_arch = "arm")]
+fn unmask_interrupt(irq: pac::Interrupt) {
+    // SAFETY: the application bound `on_dma_irq` to this line.
+    unsafe { cortex_m::peripheral::NVIC::unmask(irq) }
+}
+
+#[cfg(not(target_arch = "arm"))]
+fn unmask_interrupt(_irq: pac::Interrupt) {}
+
 /// What the constructors need back from the shared peripheral bring-up.
-struct BringUp {
+struct BringUp<P: Hub75Pins> {
     /// The panel pins, converted and held so nothing else can claim the bus.
-    pins: Hub75Pins,
+    pins: P,
     /// The PIO clock divider in use.
     divider: u16,
     /// The panel clock actually achieved: the request rounded to a divider.
@@ -763,13 +1001,13 @@ struct BringUp {
 /// The panel clock is a ceiling: the PIO divider is an integer and is rounded
 /// up, so a request no divider hits exactly runs the panel at the next slower
 /// clock rather than faster than the panel is rated for.
-fn bring_up(
+fn bring_up<P: Hub75Pins>(
     pio: pac::PIO0,
     resets: &mut pac::RESETS,
-    pins: Hub75Pins,
+    pins: P,
     system_clock: Rate<u32, 1, 1>,
     config: Hub75Config,
-) -> BringUp {
+) -> BringUp<P> {
     // A word every `CYCLES_PER_WORD` PIO cycles, so the divider is the ratio
     // between the system clock and that many times the panel clock, rounded up
     // so the panel never runs faster than the clock it was given.
@@ -787,7 +1025,7 @@ fn bring_up(
 
     let (mut pio, sm0, _, _, _) = pio.split(resets);
 
-    // The window the framebuffer words are shifted into. `Hub75Pins::new` has
+    // The window the framebuffer words are shifted into. `Hub75Pins16::new` has
     // already checked that the signals are a fourteen-pin window, each on the pin
     // its word bit is driven to, so the base is the lowest signal pin and the
     // clock is wherever it was told the clock is.
@@ -801,25 +1039,26 @@ fn bring_up(
     #[cfg(feature = "invert-clock")]
     pins.invert_clock();
 
+    let stream = P::stream();
     let program = pio
-        .install(&hub75_stream())
+        .install(stream.program())
         .expect("the stream program fits the instruction memory");
     let (mut sm, _, tx) = PIOBuilder::from_installed_program(program)
-        .out_pins(base, pins::WORD_PINS)
+        .out_pins(base, stream.window())
         .side_set_pin_base(clock)
         .clock_divisor_fixed_point(divider, 0)
         .out_shift_direction(ShiftDirection::Right)
         .autopull(true)
-        .pull_threshold(PULL_THRESHOLD)
+        .pull_threshold(stream.threshold())
         .buffers(Buffers::OnlyTx)
         .build(sm0);
 
     // Every signal pin and the clock are outputs: the machine drives the whole
-    // bus. The window's reserved pin is left alone unless the clock is wired
+    // bus. A 16-bit window's reserved pin is left alone unless the clock is wired
     // there, so a clock outside the window does not drive a pin held at zero.
     sm.set_pindirs(
-        (0..SIGNAL_COUNT)
-            .map(|index| (pins.window_pin(index), PinDir::Output))
+        pins.signal_pins()
+            .map(|pin| (pin, PinDir::Output))
             .chain(core::iter::once((clock, PinDir::Output))),
     );
     // Keep the machine running. The handle has no `Drop`, so dropping it here
@@ -839,7 +1078,7 @@ fn bring_up(
 ///
 /// Created once — there is one PIO, two DMA channels and one table — and then
 /// refreshes itself: the CPU only writes pixels and arms the occasional swap.
-pub struct Hub75<FB: FrameBuffer + 'static> {
+pub struct Hub75<FB: FrameBuffer + 'static, P: Hub75Pins> {
     /// PIO clock divider actually used, for reporting.
     divider: u16,
     /// Panel clock actually achieved: the request rounded to a divider.
@@ -849,11 +1088,16 @@ pub struct Hub75<FB: FrameBuffer + 'static> {
     /// Runs the interrupt services per refresh.
     runs: u32,
     /// The panel pins, held so nothing else can claim the bus.
-    pins: Hub75Pins,
+    pins: P,
     _marker: PhantomData<FB>,
 }
 
-impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
+impl<FB, P> Hub75<FB, P>
+where
+    FB: FrameBuffer + 'static,
+    P: Hub75Pins<Word = FB::Word>,
+    FB::Word: BusWord,
+{
     /// Starts the panel.
     ///
     /// Takes the PIO block, **two** DMA channels — `channel` streams the panel,
@@ -879,7 +1123,7 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
         channel: CH,
         control: CCH,
         resets: &mut pac::RESETS,
-        pins: Hub75Pins,
+        pins: P,
         system_clock: Rate<u32, 1, 1>,
         config: Hub75Config,
         fb: &'static mut FB,
@@ -910,7 +1154,13 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
         // it and the ring keeps both stores landing there.
         let target = channel.ch().ch_al3_trans_count().as_ptr() as u32;
         new_control_channel(&control, target);
-        new_data_channel(&channel, &control, fifo, dreq);
+        new_data_channel(
+            &channel,
+            &control,
+            fifo,
+            dreq,
+            <FB::Word as BusWord>::DATA_SIZE_LOG2,
+        );
 
         Ok(Self::start(
             &channel,
@@ -926,7 +1176,12 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
     }
 }
 
-impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
+impl<FB, P> Hub75<FB, P>
+where
+    FB: FrameBuffer + 'static,
+    P: Hub75Pins<Word = FB::Word>,
+    FB::Word: BusWord,
+{
     /// Materialises the frame in the caller's descriptor storage and starts it.
     ///
     /// Split out of [`new`](Self::new) so that one function does the peripheral
@@ -936,7 +1191,7 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
     fn start<const N: usize>(
         channel: &impl SingleChannel,
         control: &impl SingleChannel,
-        pins: Hub75Pins,
+        pins: P,
         divider: u16,
         panel_clock: Rate<u32, 1, 1>,
         interrupt: pac::Interrupt,
@@ -991,8 +1246,7 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
         // interrupt is a frame boundary, and the control channel's first
         // descriptor is what puts words on the panel.
         arm(1 << channel_id, irq_line);
-        // SAFETY: the application bound `on_dma_irq` to this line.
-        unsafe { hal::arch::interrupt_unmask(interrupt) };
+        unmask_interrupt(interrupt);
         critical_section::with(|cs| ENGINE.borrow_ref_mut(cs).restart_chain());
 
         Self {
@@ -1042,7 +1296,7 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
     }
 
     /// The panel pins the driver holds.
-    pub fn pins(&self) -> &Hub75Pins {
+    pub fn pins(&self) -> &P {
         &self.pins
     }
 }
@@ -1051,7 +1305,12 @@ impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
 // Swapping framebuffers
 // ---------------------------------------------------------------------------
 
-impl<FB: FrameBuffer<Word = u16> + 'static> Hub75<FB> {
+impl<FB, P> Hub75<FB, P>
+where
+    FB: FrameBuffer + 'static,
+    P: Hub75Pins<Word = FB::Word>,
+    FB::Word: BusWord,
+{
     /// Arms a switch to `new_fb` at the next frame boundary.
     ///
     /// Returns immediately. The incoming framebuffer differs from the one on the

@@ -1,0 +1,34 @@
+# RP2350 (Cortex-M33) build configuration.
+#
+# Selected with `--config .cargo/config-rp2350.toml` (the aliases in
+# `.cargo/config.toml` do this) together with `--features rp2350`, mirroring
+# `config-rp2040.toml`. No feature is a default, so the config file and the
+# feature are always named together. This is the only place the RP2350's target,
+# rustflags and runner live: cargo appends a `--config` file's `rustflags` to the
+# base config's, so a copy in `.cargo/config.toml` would pass `-Tlink.x` twice.
+#
+# The RP2350 has two Cortex-M33 cores, so the default is the hard-float Arm
+# target. A RISC-V (Hazard3) build is possible with
+#   cargo build --target riscv32imac-unknown-none-elf --features rp2350
+# which needs -Trp235x_riscv.x instead of -Tlink.x, see the rp-hal examples.
+
+[build]
+target = "thumbv8m.main-none-eabihf"
+
+[target.thumbv8m.main-none-eabihf]
+rustflags = [
+    # --nmagic turns off page alignment of sections (saves flash)
+    "-C", "link-arg=--nmagic",
+    # link.x comes from cortex-m-rt, which pulls in our memory.x
+    "-C", "link-arg=-Tlink.x",
+    # defmt.x places the .defmt sections and provides the logger symbols. defmt's
+    # own build script only adds the search path for this script; passing it is
+    # the application's job, and it has to come after link.x.
+    "-C", "link-arg=-Tdefmt.x",
+    "-C", "target-cpu=cortex-m33",
+]
+# The debug probe flashes, runs and carries defmt back over RTT in one step:
+# `cargo run-rp2350 --example gradient`, with the CMSIS-DAP probe attached.
+runner = "probe-rs run --chip RP235x"
+# Without a probe, flash over the USB-C bootloader instead: hold BOOT, tap RESET,
+# then `picotool load -u -v -x -t elf <elf>`.

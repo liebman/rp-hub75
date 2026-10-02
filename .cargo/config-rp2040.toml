@@ -1,0 +1,24 @@
+# RP2040 (Cortex-M0+) build configuration.
+#
+# Selected explicitly with `--config .cargo/config-rp2040.toml` (the aliases in
+# `.cargo/config.toml` do this) together with `--features rp2040`. The `rp2040`
+# feature swaps the HAL the driver is written against and the memory map
+# `build.rs` installs; this file swaps the target and the probe.
+
+[build]
+target = "thumbv6m-none-eabi"
+
+[target.thumbv6m-none-eabi]
+rustflags = [
+    # --nmagic turns off page alignment of sections (saves flash)
+    "-C", "link-arg=--nmagic",
+    # link.x comes from cortex-m-rt, which pulls in our memory.x
+    "-C", "link-arg=-Tlink.x",
+    # defmt.x places the .defmt sections and provides the logger symbols, after
+    # link.x.
+    "-C", "link-arg=-Tdefmt.x",
+    "-C", "target-cpu=cortex-m0plus",
+]
+# The debug probe flashes, runs and carries defmt back over RTT:
+# `cargo run-rp2040 --example latched`, with a CMSIS-DAP probe attached.
+runner = "probe-rs run --chip RP2040"

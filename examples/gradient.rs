@@ -20,7 +20,7 @@
 //!
 //! ```text
 //! # board in BOOTSEL mode:
-//! cargo run-arm --example gradient
+//! cargo run-rp2350 --example gradient
 //! ```
 #![no_std]
 #![no_main]
@@ -36,7 +36,7 @@ use embedded_graphics::pixelcolor::RgbColor;
 use embedded_graphics::text::Alignment;
 use embedded_graphics::text::Text;
 use panic_probe as _;
-use rp235x_hal as hal;
+use rp_hub75::hal;
 
 use hal::Sio;
 use hal::clocks::Clock;
@@ -48,7 +48,7 @@ use hub75_framebuffer::compute_rows;
 
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;
-use rp_hub75::Hub75Pins;
+use rp_hub75::Hub75Pins16;
 use rp_hub75::hub75_descriptors;
 
 /// The interrupt that walks the framebuffer's BCM sequence (see `ghost`).
@@ -58,9 +58,22 @@ extern "C" fn DMA_IRQ_1() {
 }
 
 /// Tell the Boot ROM about our application.
+#[cfg(feature = "rp2350")]
 #[unsafe(link_section = ".start_block")]
 #[used]
 pub static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
+
+/// The RP2040's second-stage bootloader.
+///
+/// The Boot ROM executes the 256 bytes at the start of flash before anything
+/// else, so without them the chip never reaches `main`. `rp2040-boot2` supplies
+/// the code for a W25Q-series flash (the reference boards want this one); a board
+/// with a different flash needs `BOOT_LOADER_GENERIC_03H` here instead. The
+/// RP2350 boots the vector table directly and needs none of this.
+#[cfg(feature = "rp2040")]
+#[unsafe(link_section = ".boot2")]
+#[used]
+pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
 /// The panel this example is wired to: 64×64, 1/32 scan.
 ///
@@ -150,8 +163,10 @@ fn main() -> ! {
         &mut watchdog,
     )
     .unwrap();
-
+    #[cfg(feature = "rp2350")]
     let timer = hal::Timer::new_timer0(pac.TIMER0, &mut pac.RESETS, &clocks);
+    #[cfg(feature = "rp2040")]
+    let timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
 
     let sio = Sio::new(pac.SIO);
     let pins = Pins::new(
@@ -172,7 +187,7 @@ fn main() -> ! {
         dma.ch0,
         dma.ch1,
         &mut pac.RESETS,
-        Hub75Pins::new(
+        Hub75Pins16::new(
             pins.gpio0,
             pins.gpio1,
             pins.gpio2,
@@ -336,6 +351,7 @@ fn decimal<'a>(buf: &'a mut [u8; 16], value: u32, suffix: &[u8]) -> &'a str {
 }
 
 /// Program metadata for `picotool info`.
+#[cfg(feature = "rp2350")]
 #[unsafe(link_section = ".bi_entries")]
 #[used]
 pub static PICOTOOL_ENTRIES: [hal::binary_info::EntryAddr; 4] = [

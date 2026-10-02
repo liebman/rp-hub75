@@ -8,6 +8,7 @@
 		"rust-analyzer.cargo.allTargets": false,
 		"rust-analyzer.cargo.targetDir": "target/rust-analyzer",
 		"rust-analyzer.cargo.features": [
+			"rp2350",
 		],
 		"rust-analyzer.cargo.target": "thumbv8m.main-none-eabihf",
 		"editor.formatOnSave": true,

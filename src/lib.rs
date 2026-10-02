@@ -1,5 +1,5 @@
-//! A HUB75 LED matrix driver for the RP2350, developed against the Pimoroni
-//! Interstate 75 W.
+//! A HUB75 LED matrix driver for the **RP2040** and **RP2350**, developed against
+//! the Pimoroni Interstate 75 W.
 //!
 //! The panel is refreshed from PIO plus DMA with no CPU involvement at all,
 //! and the framebuffers come from the [`framebuffer`] crate that backs
@@ -7,8 +7,35 @@
 //! machinery, the tiling helpers and the `embedded-graphics` integration are
 //! reused rather than rewritten.
 //!
-//! The reference wiring is the Interstate 75 W's, whose signals [`pins`] names as
-//! offsets in bus order. On that board the window starts at GP0:
+//! # Two buses, two word widths
+//!
+//! A framebuffer word *is* the bus, so the framebuffer type picks the bus. Two
+//! widths are supported, each with its own pin set and PIO program:
+//!
+//! | bus | framebuffer | pins | program |
+//! |---|---|---|---|
+//! | 16-bit direct drive | [`framebuffer::bitplane::plain`] | [`Hub75Pins16`] | `out pins, 14` |
+//! | 8-bit latched | [`framebuffer::bitplane::latched`] | [`Hub75Pins8`] | `out pins, 8` |
+//!
+//! The latched bus needs an external latch circuit (the row address rides in
+//! trailing address bytes, not in the word). A [`Hub75`] is generic over the pin
+//! set and requires its `Word` to equal the framebuffer's, so a mismatched pair
+//! does not type-check.
+//!
+//! # The target
+//!
+//! The HAL is a build-time choice, selected by the `rp2040` or `rp2350` feature
+//! (exactly one, and neither is a default), and re-exported as [`hal`]. The PIO
+//! and DMA code is the same on both parts — the register blocks are the same
+//! shape — so the crate builds for `thumbv6m-none-eabi` and
+//! `thumbv8m.main-none-eabihf` from one source. `.cargo/config-rp2040.toml` and
+//! `.cargo/config-rp2350.toml` carry the per-board target and probe settings; the
+//! aliases in `.cargo/config.toml` name the config file and the feature together.
+//!
+//! # The reference wiring
+//!
+//! The Interstate 75 W's, whose signals [`pins`] names as offsets in bus order.
+//! On that board the window starts at GP0:
 //!
 //! | | |
 //! |---|---|
@@ -18,8 +45,10 @@
 //! | buttons, status LED, Qw/ST | GP14, GP15, GP22 / GP18 / GP20 + GP21 |
 //!
 //! GP11 is the word's one reserved bit, which is where the clock is wired there;
-//! [`Hub75Pins::new`] takes the clock as its own argument and accepts a pin
-//! outside the window instead.
+//! [`Hub75Pins16::new`] takes the clock as its own argument and accepts a pin
+//! outside the window instead. The 8-bit latched bus has no reserved slot, so its
+//! clock is always outside the window — see [`pins::latched`] and
+//! `examples/latched.rs`.
 //!
 //! # Using it
 //!
@@ -63,7 +92,7 @@
 //! The library holds no panel: each example states the one it is wired to and
 //! derives its framebuffer type from it, because the board — the Interstate
 //! 75 W — is a HUB75 header with no panel attached. What is the board's is the
-//! **pin window** and the **word layout**: [`Hub75Pins::new`] takes the thirteen
+//! **pin window** and the **word layout**: [`Hub75Pins16::new`] takes the thirteen
 //! signals in bus order plus the clock, derives the window's base from the lowest
 //! pin, and checks every signal against [`pins::LAYOUT`] — so a wiring mistake
 //! stops startup rather than driving the wrong pins — while the word layout
@@ -106,16 +135,34 @@
 
 #![no_std]
 
+// The target HAL is a build-time choice, and exactly one is needed: without one
+// there is no `hal` to drive the panel, and with both the two crates collide.
+#[cfg(all(feature = "rp2040", feature = "rp2350"))]
+compile_error!("enable exactly one of the `rp2040` and `rp2350` features");
+#[cfg(not(any(feature = "rp2040", feature = "rp2350")))]
+compile_error!("enable one of the `rp2040` and `rp2350` features");
+
 pub mod descriptor;
 pub mod driver;
 pub mod pins;
 pub mod programs;
+
+/// The HAL this build targets.
+///
+/// Selected by the `rp2040` or `rp2350` feature (exactly one), so the driver,
+/// the examples, and host code all name one `hal` path.
+#[cfg(feature = "rp2350")]
+pub use rp235x_hal as hal;
+#[cfg(feature = "rp2040")]
+pub use rp2040_hal as hal;
 
 pub use descriptor::Hub75Descriptors;
 pub use driver::Hub75;
 pub use driver::Hub75Config;
 pub use driver::Hub75Error;
 pub use driver::Hub75Pins;
+pub use driver::Hub75Pins8;
+pub use driver::Hub75Pins16;
 pub use driver::Hub75Swap;
 pub use driver::PioPin;
 pub use driver::on_dma_irq;

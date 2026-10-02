@@ -6,7 +6,7 @@ Working agreement for coding agents in `rp-hub75`. Human-facing orientation is i
 
 ## Project
 
-A `no_std` HUB75 LED matrix driver for the **RP2350**. The **Pimoroni Interstate
+A `no_std` HUB75 LED matrix driver for the **RP2040** and **RP2350**. The **Pimoroni Interstate
 75 W** (64×64, 1/32 scan) is the *reference board* — where the pin map comes from
 and where every measurement in `NOTES.md` was taken — not the only target. One
 PIO state machine streams a `hub75-framebuffer` bitplane framebuffer straight at
@@ -33,7 +33,7 @@ to another board is therefore a *base pin* plus the same bus order —
 GP0–GP13 as the default and as the reference wiring, but do not let new code
 assume it.
 
-Status: the pin selection is a parameter. `Hub75Pins::new` takes the thirteen
+Status: the pin selection is a parameter. `Hub75Pins16::new` takes the thirteen
 signals in bus order as any GPIOs the PIO can drive — thirteen `PinId`s and a
 `PioPin` bound, not `Gpio0`–`Gpio13` — derives the window's base from the *lowest*
 pin, and checks at startup that each signal is on the pin its word bit is driven
@@ -51,6 +51,31 @@ pin base of its own and may be the window's reserved pin (`pins::RESERVED`, wher
 the word holds zero) or any pin outside the window — in which case the reserved pin
 is left unwired and out of `set_pindirs`. A clock on a signal pin is refused,
 because the side-set wins on an overlap and would overwrite that signal silently.
+
+### The 8-bit latched bus
+
+The crate drives two buses, and a `Hub75Pins` **trait** carries the difference:
+`Hub75Pins16` is the fourteen-pin direct-drive bus above, and `Hub75Pins8` is the
+eight-signal latched one (`R1 G1 B1 R2 G2 B2 LAT OE`, with the row address in
+trailing `Address` bytes rather than in the word). A `Hub75` is generic over its
+pin set and requires the set's `Word` to equal the framebuffer's, so an 8-bit pin
+set with a 16-bit framebuffer — or the reverse — does not type-check. The trait also
+returns the `programs::Stream` (a program with the window width it writes), so
+`out pins, 14` and `out pins, 8` cannot fall out of step with their word.
+
+The 8-bit window has **no reserved bit**, so its clock is always outside the window;
+`Hub75Pins8::new` refuses a clock inside it, and `pins::latched` is the layout,
+held to `hub75-framebuffer` by its own host test. `examples/latched.rs` is the
+wiring.
+
+### The target
+
+The HAL is a build-time choice: the `rp2040` or `rp2350` feature (exactly one,
+and neither is a default) selects `rp2040-hal` or `rp235x-hal`, re-exported as
+`rp_hub75::hal`. Keep the driver and examples naming `crate::hal` / `rp_hub75::hal`
+rather than a HAL crate directly. The RP2040 has two DMA interrupt lines, not four,
+and no atomic compare-and-swap; both are handled in `src/driver.rs` and in
+`Cargo.toml` (see the `rp2040` notes there).
 
 GP0–GP13 is the reference wiring and the examples' default, the clock being GP11.
 The base is 0 there, so nothing about the reference board changed; a non-zero base
@@ -71,9 +96,10 @@ window, the signal order, and the crystal.
 | path | what |
 |---|---|
 | `src/driver.rs` | `Hub75`, `Hub75Config`, `Hub75Pins`, `Hub75Swap`, `PioPin`, `on_dma_irq` |
-| `src/descriptor.rs` | the engine: the frame as a descriptor table a control channel plays into the data channel's `AL3` block |
-| `src/programs.rs` | the PIO stream program and the word↔pin layout |
-| `src/pins.rs` | the HUB75 word layout as data, the window's bounds, and the host test that pins the layout to `hub75-framebuffer` |
+| `src/descriptor.rs` | the engine: the frame as a descriptor table a control channel plays into the data channel's `AL3` block, plus `BusWord` (the framebuffer word's width and DMA `DATA_SIZE`) |
+| `src/programs.rs` | the two PIO stream programs (`hub75_stream16`, `hub75_stream8`) and the `Stream` that pairs a program with its window |
+| `src/pins.rs` | the 16-bit HUB75 word layout as data (`pins`) and the 8-bit one (`pins::latched`), the window's bounds, and the host tests that pin each layout to `hub75-framebuffer` |
+| `.cargo/config-rp2040.toml`, `.cargo/config-rp2350.toml`, `memory-rp2040.x`, `memory-rp2350.x`, `build.rs` | the per-board target, runner and memory map; `build.rs` installs the selected `memory-*.x` as `memory.x` |
 | `examples/` | `gradient`, `telemetry`, `ghost`, `ladder` — every example goes through `Hub75` |
 | `NOTES.md` | measurements, datasheet facts, and the reasoning: the design record |
 | `plan.md` | milestones: what is done, in progress, and next |
@@ -94,22 +120,24 @@ lines: each one is shaped around the bare-metal target.
 
 | command | what, and why |
 |---|---|
-| `./test-all.sh` | Host unit tests. The default target is `thumbv8m.main-none-eabihf`, where tests cannot *run*, so the script asks for the host triple explicitly. Runs the four polarity combinations. |
-| `./build-all.sh` | `cargo build-arm` (= `build --release`) for the library and every example, in the four polarity combinations. |
-| `./clippy-all.sh` | `cargo clippy --release --lib --examples`. Not `--all-targets`: the test harness needs `core::test`, which does not exist for this target. Same feature passes as `build-all.sh`. |
+| `./test-all.sh` | Host unit tests through `cargo test-rp2350` (the alias names the board feature) with `--target` pinned to the host triple. One pass: the polarity features do not change what a test observes. |
+| `./build-all.sh` | `cargo build-rp2350` for the library and every example, in the four polarity combinations. The alias names `.cargo/config-rp2350.toml` and `rp2350`; no feature is a default. |
+| `./clippy-all.sh` | `cargo clippy-rp2350 --lib --examples`. Not `--all-targets`: the test harness needs `core::test`, which does not exist for this target. Same feature passes as `build-all.sh`. |
 | `./fmt-all.sh` | `cargo fmt --all`, then `--check`. Do not add a `rustfmt.toml` without agreeing on it. |
-| `cargo run-arm --example gradient` | Builds, flashes and runs over the debug probe (`probe-rs run --chip RP235x`), and streams the `defmt` log back on the same terminal. Without a probe, flash over the USB-C bootloader instead: hold BOOT, tap RESET, `picotool load -u -v -x -t elf <elf>`. |
-| `cargo doc --no-deps` | Checks that the documentation builds. A `rustdoc` warning is a bug — nothing denies them here, and there is no `cargo xtask` in this crate. |
+| `cargo run-rp2350 --example gradient` | Builds, flashes and runs over the debug probe (`probe-rs run --chip RP235x`), and streams the `defmt` log back on the same terminal. Without a probe, flash over the USB-C bootloader instead: hold BOOT, tap RESET, `picotool load -u -v -x -t elf <elf>`. |
+| `cargo build-rp2040` / `cargo run-rp2040` (e.g. `--example latched`) | The same, for the RP2040: the alias names `.cargo/config-rp2040.toml` (target `thumbv6m-none-eabi`, `probe-rs run --chip RP2040`) and the `rp2040` feature; neither board feature is a default. `build-rp2350`/`run-rp2350` are the symmetric names. |
+| `cargo doc-rp2350` | Checks that the documentation builds (the alias names the board and the `--no-deps` flag). A `rustdoc` warning is a bug — nothing denies them here, and there is no `cargo xtask` in this crate. |
 
 There is no CI and no `.github/`. Whatever a change claims is verified, you ran.
 
 Hardware is the only judge of the panel. Host tests cover only what a file can be
 wrong about by itself — the clock divider, the descriptor table `fill` and `patch`
-write, and the pin checks `Hub75Pins::new` makes. The last of those includes
-`src/pins.rs`'s layout test, which draws pixels into a real `hub75-framebuffer`
-framebuffer and asserts which word bits move: that is what keeps `LAYOUT` from
-drifting away from the dependency it describes. There are no tests for the stream
-program or for the drawing convention the examples use: the program is two PIO
+write, and the pin checks `Hub75Pins16::new` and `Hub75Pins8::new` make. The last
+of those includes `src/pins.rs`'s layout tests, which draw pixels into a real
+`hub75-framebuffer` framebuffer of each word width and assert which word bits move:
+that is what keeps `LAYOUT` and `pins::latched::LAYOUT` from
+drifting away from the dependency they describe. There are no tests for the stream
+program or for the drawing convention the examples use: the programs are two PIO
 instructions, and the emulator that used to step it supplied its own state-machine
 configuration, so it could not have caught a driver that configured the machine
 differently; the colour arithmetic now lives in bare-metal examples, which cannot be
@@ -119,7 +147,7 @@ otherwise.
 
 ### Logging
 
-`defmt` over RTT, through the debug probe: `cargo run-arm --example <name>` prints
+`defmt` over RTT, through the debug probe: `cargo run-rp2350 --example <name>` prints
 it. The examples own the log — `defmt`, `defmt-rtt` and `panic-probe` are
 dev-dependencies, and a log line is a plain `defmt::info!` — so three rules come
 with that.
