@@ -667,9 +667,22 @@ pub(crate) fn arm(flag: u32, line: u8) {
         3 => dma.inte3().as_ptr(),
         _ => unreachable!("a DMA interrupt line is 0 to 3"),
     };
-    // SAFETY: one of the DMA's interrupt-enable registers, read-modify-written
-    // once at init.
-    unsafe { register.write_volatile(register.read_volatile() | flag) };
+    // SAFETY: one of the DMA's interrupt-enable registers. The read-modify-write
+    // is serialized against any other arm in a critical section, so a bit set
+    // concurrently cannot be lost by a stale read.
+    critical_section::with(|_cs| unsafe {
+        register.write_volatile(register.read_volatile() | flag)
+    });
+}
+
+/// Whether a channel's completion is pending on the line's `INTR`.
+///
+/// `INTR` is not masked by `INTEn`, so a set bit is some channel's completion and
+/// not necessarily one this driver armed. The line is unused: this PAC models one
+/// `INTR` for every DMA line, as [`clear_intr`] notes.
+pub(crate) fn intr_pending(_line: u8, flag: u32) -> bool {
+    // SAFETY: the DMA block is a static peripheral, and this only reads.
+    unsafe { (*hal::pac::DMA::ptr()).intr().read().bits() & flag != 0 }
 }
 
 /// Acknowledges a channel's completion: writes the flag to `INTR`.

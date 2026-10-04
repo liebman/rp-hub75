@@ -397,13 +397,23 @@ static WAKER: IrqWaker = IrqWaker::new();
 /// ```
 ///
 /// It is safe to call for *any* interrupt routed to that line: with no driver
-/// running it touches nothing at all.
+/// running it touches nothing, and a completion from a neighbouring channel that
+/// shares the line is ignored rather than stepping the frame.
 pub fn on_dma_irq() {
     let swapped = critical_section::with(|cs| {
         let mut engine = ENGINE.borrow_ref_mut(cs);
         let engine = &mut *engine;
         if engine.table_count == 0 {
-            // No driver, or an interrupt from a neighbour on the same line.
+            // No driver running.
+            return false;
+        }
+
+        // Only *our* channel's completion may step the frame. A neighbour on the
+        // same line must not restart the chain mid-frame, so a completion that is
+        // not the data channel's is left for its owner. `INTR` is not masked by
+        // `INTEn`, so the bit is readable whether or not the neighbour armed the
+        // line for its own flag.
+        if !backend::intr_pending(engine.irq_line, engine.flag) {
             return false;
         }
 

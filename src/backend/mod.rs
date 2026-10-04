@@ -25,7 +25,7 @@ mod window;
 #[doc(inline)]
 pub use rphal::{Hub75Pins8, Hub75Pins16, PioPin, bring_up};
 #[cfg(feature = "rphal")]
-pub(crate) use rphal::{arm, clear_intr};
+pub(crate) use rphal::{arm, clear_intr, intr_pending};
 
 #[cfg(feature = "embassy")]
 mod embassy;
@@ -33,7 +33,7 @@ mod embassy;
 #[doc(inline)]
 pub use embassy::{EmbassyPins, Hub75Pins8, Hub75Pins16, PioPin, bring_up};
 #[cfg(feature = "embassy")]
-pub(crate) use embassy::{arm, clear_intr};
+pub(crate) use embassy::{arm, clear_intr, intr_pending};
 
 /// The two PIO stream programs and the `Stream` pairing a program with its
 /// window.

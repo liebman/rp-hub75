@@ -334,7 +334,17 @@ pub(super) fn al3_trans_count(channel: &DmaChannel) -> u32 {
 /// Enables a channel's completion on one of the DMA interrupt lines.
 pub(crate) fn arm(flag: u32, line: u8) {
     let inte = pac::DMA.inte(line as usize);
-    inte.write_value(inte.read() | flag);
+    // A critical section around the read-modify-write, so a bit set concurrently
+    // by another arm cannot be lost by a stale read.
+    critical_section::with(|_cs| inte.write_value(inte.read() | flag));
+}
+
+/// Whether a channel's completion is pending on the line's `INTR`.
+///
+/// `INTR` is not masked by `INTEn`, so a set bit is some channel's completion and
+/// not necessarily one this driver armed.
+pub(crate) fn intr_pending(line: u8, flag: u32) -> bool {
+    pac::DMA.intr(line as usize).read() & flag != 0
 }
 
 /// Acknowledges a channel's completion: writes the flag to the line's `INTR`.
