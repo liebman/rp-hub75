@@ -44,6 +44,7 @@ test-rp2350   = "test   --config .cargo/config-rp2350.toml --lib     --features 
 # The examples, each naming its board config and features itself.
 run-gradient         = "run --config .cargo/config-rp2350.toml --release --example gradient  --features rphal,rp2350"
 run-ghost            = "run --config .cargo/config-rp2350.toml --release --example ghost     --features rphal,rp2350"
+run-starfield        = "run --config .cargo/config-rp2350.toml --release --example starfield --features rphal,rp2350"
 run-ladder           = "run --config .cargo/config-rp2350.toml --release --example ladder    --features rphal,rp2350"
 run-latched          = "run --config .cargo/config-rp2350.toml --release --example latched   --features rphal,rp2350"
 run-telemetry        = "run --config .cargo/config-rp2350.toml --release --example telemetry --features rphal,rp2350"

@@ -173,6 +173,10 @@ name = "ghost"
 required-features = ["rphal"]
 
 [[example]]
+name = "starfield"
+required-features = ["rphal"]
+
+[[example]]
 name = "ladder"
 required-features = ["rphal"]
 
