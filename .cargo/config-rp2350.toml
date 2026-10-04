@@ -1,10 +1,11 @@
 # RP2350 (Cortex-M33) build configuration.
 #
 # Selected with `--config .cargo/config-rp2350.toml` (the aliases in
-# `.cargo/config.toml` do this) together with the `rp2350` or `embassy-rp2350`
-# feature. The feature picks the HAL; this file, and the memory map it points the
-# linker at, are the chip's. Cargo appends a `--config` file's `rustflags` to the
-# base config's, so the settings live here and not in `.cargo/config.toml`.
+# `.cargo/config.toml` do this) together with the `rp2350` chip feature and
+# either backend. The chip feature picks the HAL for rp-hal; this file, and the
+# memory map it points the linker at, are the chip's. Cargo appends a `--config`
+# file's `rustflags` to the base config's, so the settings live here and not in
+# `.cargo/config.toml`.
 #
 # The RP2350 has two Cortex-M33 cores, so the default is the hard-float Arm
 # target. A RISC-V (Hazard3) build is possible with

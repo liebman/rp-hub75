@@ -13,31 +13,34 @@ version = "0.1.0"
 name = "rp_hub75"
 
 [features]
-# No feature is a default. The target HAL (`rp2040` or `rp2350`) must be named
-# explicitly, and every alias in `.cargo/config.toml` names it together with the
-# matching `.cargo/config-*.toml`, so the target and the HAL always change
-# together. A build with neither feature stops on the `compile_error!` in
-# `src/lib.rs`.
+# No feature is a default. The target is two independent axes, and both are named
+# on the command line: the backend, `rphal` or `embassy`, and the chip, `rp2040`
+# or `rp2350`. Exactly one of each, so `--features rphal,rp2350` is the RP2350
+# driven through rp-hal. The aliases in `.cargo/config.toml` name a pair
+# together with the matching `.cargo/config-*.toml`, and a build missing an axis
+# stops on the `compile_error!` in `src/lib.rs`.
 
-# --- Target HAL --------------------------------------------------------------
+# --- Target selection --------------------------------------------------------
 #
-# Exactly one. `rp2350` is the Interstate 75 W and every board this crate has
-# been flashed on; `rp2040` builds the same driver for the RP2040. They select
-# the HAL the driver is written against — the PIO and DMA register blocks are the
-# same shape on both parts — and the `hal` path the examples import.
-rp2350 = ["dep:rp235x-hal", "backend-rphal"]
-rp2040 = ["dep:rp2040-hal", "dep:rp2040-boot2", "backend-rphal"]
+# The backend family. Exactly one. `rphal` is `rp2040-hal`/`rp235x-hal`, which
+# share `rp-hal-common`; `embassy` is `embassy-rp`. They select the HAL the
+# driver is written against — the PIO and DMA register blocks are the same shape
+# on both parts — and the `hal` path the examples import.
+#
+# Cargo features are additive, so a feature cannot pull a dependency only when a
+# second feature is also set, and `rphal` names *both* chips' crates. The axes
+# are kept apart by the *target* instead: each chip's rp-hal crate is declared
+# under that chip's target table below, so the wrong chip's crate is never built.
+rphal = ["dep:rp235x-hal", "dep:rp2040-hal", "dep:rp2040-boot2"]
+embassy = ["dep:embassy-rp", "embassy-rp/critical-section-impl", "embassy-rp/rt", "embassy-rp/time-driver", "embassy-rp/unstable-pac"]
 
-# The embassy-rp backend, selected the same way: exactly one of these, mutually
-# exclusive with the rp-hal pair above. embassy-rp carries its own chip feature.
-embassy-rp2350 = ["dep:embassy-rp", "embassy-rp/critical-section-impl", "embassy-rp/rp235xa", "embassy-rp/rt", "embassy-rp/time-driver", "embassy-rp/unstable-pac", "backend-embassy"]
-embassy-rp2040 = ["dep:embassy-rp", "embassy-rp/critical-section-impl", "embassy-rp/rp2040", "embassy-rp/rt", "embassy-rp/time-driver", "embassy-rp/unstable-pac", "backend-embassy"]
-
-# Internal: the `examples/` gate on the backend *family*, not the chip, because
-# Cargo's `required-features` is a conjunction and both chips share the rp-hal
-# examples.
-backend-rphal = []
-backend-embassy = []
+# The chip. Exactly one. `rp2350` is the Interstate 75 W and every board this
+# crate has been flashed on; `rp2040` builds the same driver for the RP2040. The
+# rp-hal crate follows from the chip's target table, so the feature is a marker
+# there; for embassy-rp it sets the crate's chip with the weak `?`, which is a
+# no-op in an rp-hal build, where embassy-rp is not enabled.
+rp2350 = ["embassy-rp?/rp235xa"]
+rp2040 = ["embassy-rp?/rp2040"]
 
 # --- Library features --------------------------------------------------------
 #
@@ -113,26 +116,17 @@ portable-atomic = { version = "1", default-features = false }
 # straight on the pins. See `src/programs.rs`.
 hub75-framebuffer = { version = "0.12.0", features = ["interstate75"] }
 pio = "0.3"
-# The two HALs share `rp-hal-common` and `pio 0.3`, so the driver's PIO and DMA
-# code is identical against either; only the crate name and the PAC behind it
-# change. Exactly one is enabled, by the `rp2040`/`rp2350` feature.
-rp2040-hal = { version = "0.12.0", optional = true, features = [
-    "critical-section-impl",
-    "rt",
-] }
-# The RP2040 ROM executes a 256-byte second-stage bootloader from the start of
-# flash before the application. `rp2040-boot2` provides its code as
-# `BOOT2_FIRMWARE`, which `memory-rp2040.x` pulls in and places.
-rp2040-boot2 = { version = "0.3.0", optional = true }
-rp235x-hal = { version = "0.4.0", optional = true, features = [
-    "binary-info",
-    "critical-section-impl",
-    "rt",
-] }
+# The `rp2040`/`rp235x` HALs are not here: they are target-specific, and live in
+# the chip tables at the end of this file so `rphal` can name both without
+# building the wrong chip's crate. They share `rp-hal-common` and `pio 0.3`, so
+# the driver's PIO and DMA code is identical against either; only the crate name
+# and the PAC behind it change.
+#
 # The second backend: the same PIO and DMA driven through embassy-rp's async,
-# channel/state-machine API rather than rp-hal's. Exactly one of `embassy-rp2350`
-# /`embassy-rp2040` selects it. Its `time-driver` is not enabled: the driver needs
-# no timer, and `clk_sys_freq()` reports the clock without one.
+# channel/state-machine API rather than rp-hal's. The `embassy` feature selects
+# it; the chip feature carries embassy-rp's chip. Its chip is set weakly by
+# `rp2040`/`rp2350`, and its `time-driver` is not enabled: the driver needs no
+# timer, and `clk_sys_freq()` reports the clock without one.
 embassy-rp = { version = "0.10", optional = true, default-features = false }
 # `fugit` is the `Rate` type the API uses. `rp-hal` re-exports it as
 # `hal::fugit`; `embassy-rp` does not, so the crate names it directly and both
@@ -172,27 +166,27 @@ panic-probe = { version = "1", features = ["print-defmt"] }
 
 [[example]]
 name = "gradient"
-required-features = ["backend-rphal"]
+required-features = ["rphal"]
 
 [[example]]
 name = "ghost"
-required-features = ["backend-rphal"]
+required-features = ["rphal"]
 
 [[example]]
 name = "ladder"
-required-features = ["backend-rphal"]
+required-features = ["rphal"]
 
 [[example]]
 name = "latched"
-required-features = ["backend-rphal"]
+required-features = ["rphal"]
 
 [[example]]
 name = "telemetry"
-required-features = ["backend-rphal"]
+required-features = ["rphal"]
 
 [[example]]
 name = "gradient-embassy"
-required-features = ["backend-embassy"]
+required-features = ["embassy"]
 
 [profile.dev]
 debug = true
@@ -205,10 +199,42 @@ opt-level = "s"
 [patch.crates-io]
 hub75-framebuffer = { path = "../hub75-framebuffer" }
 
+# --- Target-specific dependencies --------------------------------------------
+#
+# The `rphal` feature names both chips' rp-hal crates, and each is declared only
+# in its own chip's target table, so the wrong chip's crate is never resolved
+# even though its `dep:` name is enabled. The `thumbv8m.main` triple contains a
+# dot, which TOML would read as nested keys, so the table key is quoted.
+#
+# The host entry keeps the library buildable for the host tests and `cargo doc`:
+# the host is not a chip, and it uses the RP2350 HAL. `not(target_os = "none")`
+# is true only off bare metal, so it does not match a chip build.
+[target.'cfg(not(target_os = "none"))'.dependencies]
+rp235x-hal = { version = "0.4.0", optional = true, features = [
+    "binary-info",
+    "critical-section-impl",
+    "rt",
+] }
+
+[target."thumbv8m.main-none-eabihf".dependencies]
+rp235x-hal = { version = "0.4.0", optional = true, features = [
+    "binary-info",
+    "critical-section-impl",
+    "rt",
+] }
+
+[target.thumbv6m-none-eabi.dependencies]
+rp2040-hal = { version = "0.12.0", optional = true, features = [
+    "critical-section-impl",
+    "rt",
+] }
+# The RP2040 ROM executes a 256-byte second-stage bootloader from the start of
+# flash before the application. `rp2040-boot2` provides its code as
+# `BOOT2_FIRMWARE`, which each example places in `.boot2`.
+rp2040-boot2 = { version = "0.3.0", optional = true }
 # On the RP2040 the atomic compare-and-swap the driver and `static_cell` need is
 # provided through a critical section, because the Cortex-M0+ has none. The
 # RP2350 (Cortex-M33) has real atomics, so this does not apply there.
-[target.thumbv6m-none-eabi.dependencies]
 portable-atomic = { version = "1", default-features = false, features = [
     "critical-section",
 ] }

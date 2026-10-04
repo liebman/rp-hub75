@@ -341,9 +341,9 @@ fn line_index(irq: pac::Interrupt) -> Option<u8> {
     match irq {
         pac::Interrupt::DMA_IRQ_0 => Some(0),
         pac::Interrupt::DMA_IRQ_1 => Some(1),
-        #[cfg(any(feature = "rp2350", feature = "embassy-rp2350"))]
+        #[cfg(feature = "rp2350")]
         pac::Interrupt::DMA_IRQ_2 => Some(2),
-        #[cfg(any(feature = "rp2350", feature = "embassy-rp2350"))]
+        #[cfg(feature = "rp2350")]
         pac::Interrupt::DMA_IRQ_3 => Some(3),
         _ => None,
     }

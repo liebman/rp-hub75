@@ -70,23 +70,28 @@ panel; the target features pick the HAL, and the example features the examples.
 
 ### Target features
 
-Exactly one selects the backend the driver is compiled against — and, with it,
-the target triple and the probe. None is a default: the aliases in
-`.cargo/config.toml` name the feature and the config file together, so a build
-without one stops instead of picking a board. Two of the four build against
-`rp2040-hal` / `rp235x-hal` (which share `rp-hal-common`); the other two against
-`embassy-rp`. The PIO and DMA register blocks are the same shape and both HALs use
-the same `pio` crate, so the engine and the stream programs are shared and only
-the port differs. `.cargo/config-rp2040.toml` and `.cargo/config-rp2350.toml` carry the per-chip
-target and runner settings, shared by both HALs (see
-the build table in [`AGENTS.md`](AGENTS.md)).
+The target is two features named together, one from each axis: the backend
+(`rphal` or `embassy`) and the chip (`rp2040` or `rp2350`). None is a default:
+the aliases in `.cargo/config.toml` name a pair and the config file together, so
+a build missing an axis stops instead of picking a board. `rphal` builds against
+`rp2040-hal` / `rp235x-hal` (which share `rp-hal-common`); `embassy` against
+`embassy-rp`. The PIO and DMA register blocks are the same shape and both HALs
+use the same `pio` crate, so the engine and the stream programs are shared and
+only the port differs. `.cargo/config-rp2040.toml` and
+`.cargo/config-rp2350.toml` carry the per-chip target and runner settings, shared
+by both backends (see the build table in [`AGENTS.md`](AGENTS.md)).
+
+Each chip's `rp-hal` crate is declared under that chip's target triple, so
+`rphal` can name both without building the wrong one — a build is
+`--features rphal,rp2350`, `rphal,rp2040`, `embassy,rp2350`, or
+`embassy,rp2040`.
 
 | feature | effect |
 |---|---|
-| `rp2350` | the RP2350 (Cortex-M33), `thumbv8m.main-none-eabihf`, against `rp235x-hal` |
-| `rp2040` | the RP2040 (Cortex-M0+), `thumbv6m-none-eabi`, against `rp2040-hal`. Also the RP2040 `memory.x`; the examples place the second-stage bootloader in `.boot2` |
-| `embassy-rp2350` | the RP2350, against `embassy-rp` |
-| `embassy-rp2040` | the RP2040, against `embassy-rp` |
+| `rphal` | the backend against `rp2040-hal` / `rp235x-hal`, which the chip feature selects |
+| `embassy` | the backend against `embassy-rp`, whose chip the chip feature selects |
+| `rp2350` | the RP2350 (Cortex-M33), `thumbv8m.main-none-eabihf`, `rp235x-hal` |
+| `rp2040` | the RP2040 (Cortex-M0+), `thumbv6m-none-eabi`, `rp2040-hal`. Also the RP2040 `memory.x`; the examples place the second-stage bootloader in `.boot2` |
 
 ### Library features
 
@@ -116,7 +121,7 @@ list.
 | `telemetry` | the same engine and panel pattern, with `wait_for_done().await` and frames/interrupts/swaps once a second over `defmt` → RTT (the digit on the panel is the loop’s frame count). `irqs` should track the frame count one for one: one interrupt a frame is the whole engine |
 | `ghost` | a ghosting / bleed probe: four phases — a blinking dot, a raster, a diagonal and a sweeping bar — that make row bleed (adjacent, and across the frame boundary) and column bleed visible, and name their direction |
 | `ladder` | the read-back ladder: five patterns, two seconds each, whose *failure modes* name a fault rather than just looking wrong — one row pair lit means the stream stopped, columns at x = 1, 2, 3 mean the panel latches on `STB`'s rising edge, the diagonal shifted means the address lines are a row out. A regression tool; `gradient` and `ghost` are the same questions at the eye's resolution |
-| `gradient-embassy` | `gradient` on the embassy-rp backend: `#[embassy_executor::main]`, a `bind_interrupts!` handler calling `on_dma_irq`, and `wait_for_done().await`. Built and run with `cargo build-embassy` / `cargo run-embassy --example gradient-embassy` (the `embassy-rp2350` feature) |
+| `gradient-embassy` | `gradient` on the embassy-rp backend: `#[embassy_executor::main]`, a `bind_interrupts!` handler calling `on_dma_irq`, and `wait_for_done().await`. Built and run with `cargo build-embassy` / `cargo run-embassy --example gradient-embassy` (the `embassy,rp2350` features) |
 | `latched` | the **8-bit latched** bus: the `gradient` display on `bitplane::latched` and `Hub75Pins8`, drawn through an external latch circuit on a non-zero window base (GP2–GP9, clock GP10). Needs the breadboard latch, not just the panel header |
 
 Three earlier engines lived in examples too — M3's raw single-channel stream, M4a's

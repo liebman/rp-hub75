@@ -1,9 +1,9 @@
 # RP2040 (Cortex-M0+) build configuration.
 #
 # Selected with `--config .cargo/config-rp2040.toml` (the aliases in
-# `.cargo/config.toml` do this) together with the `rp2040` or `embassy-rp2040`
-# feature. The feature picks the HAL; this file, and the memory map it points the
-# linker at, are the chip's.
+# `.cargo/config.toml` do this) together with the `rp2040` chip feature and
+# either backend. The chip feature picks the HAL for rp-hal; this file, and the
+# memory map it points the linker at, are the chip's.
 
 [build]
 target = "thumbv6m-none-eabi"

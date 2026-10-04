@@ -9,8 +9,8 @@
 //! awaited with `wait_for_done().await`; and the clock is `embassy-time`.
 //!
 //! ```text
-//! cargo run --config .cargo/config-embassy.toml --release \
-//!     --example gradient-embassy --features embassy-rp2350
+//! cargo run --config .cargo/config-rp2350.toml --release \
+//!     --example gradient-embassy --features embassy,rp2350
 //! ```
 #![no_std]
 #![no_main]
@@ -119,6 +119,11 @@ async fn main(_spawner: Spawner) {
     let fb0: &'static mut Fb = mk_static!(Fb, Fb::new());
     let fb1: &'static mut Fb = mk_static!(Fb, Fb::new());
 
+    // The framebuffers' addresses, taken before they move into the driver. The
+    // alignment does not change the picture; the log is where it is checked.
+    let fb0_addr = fb0 as *const Fb as usize;
+    let fb1_addr = fb1 as *const Fb as usize;
+
     let hub75 = Hub75::new(
         pio,
         p.DMA_CH0,
@@ -130,6 +135,35 @@ async fn main(_spawner: Spawner) {
         hub75_descriptors!(Fb),
     )
     .expect("failed to start the panel");
+
+    // The panel's numbers, once, as the esp-hub75 gradient prints them. The display
+    // carries the live refresh rate and runs a frame; the log carries what it cannot
+    // — the geometry, the divider, the framebuffer's size and where it landed, and
+    // the descriptor table's length.
+    defmt::info!(
+        "{}x{} panel, {} row pairs, {} planes",
+        PANEL_WIDTH,
+        PANEL_HEIGHT,
+        NROWS,
+        PLANES
+    );
+    defmt::info!(
+        "panel clock {} Hz -> divider /{} -> {} Hz, {} Hz refresh, {} runs a refresh",
+        PANEL_CLOCK.to_Hz(),
+        hub75.divider(),
+        hub75.panel_clock().to_Hz(),
+        hub75.refresh_hz(),
+        hub75.runs_per_refresh()
+    );
+    defmt::info!(
+        "framebuffers {} bytes at {=usize:#x} and {=usize:#x}, {} descriptors ({} bytes)",
+        core::mem::size_of::<Fb>(),
+        fb0_addr,
+        fb1_addr,
+        rp_hub75::descriptor::descriptor_count::<Fb>(),
+        rp_hub75::descriptor::descriptor_count::<Fb>()
+            * core::mem::size_of::<rp_hub75::descriptor::Descriptor>()
+    );
 
     // fb0 is on the panel now; this loop draws into fb1 until the first swap.
     let mut fb = fb1;

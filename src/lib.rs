@@ -135,28 +135,19 @@
 
 #![no_std]
 
-// The backend is a build-time choice, and exactly one is needed: without one
-// there is no HAL to drive the panel, and with two the two HALs collide.
-#[cfg(not(any(
-    feature = "rp2040",
-    feature = "rp2350",
-    feature = "embassy-rp2040",
-    feature = "embassy-rp2350"
-)))]
-compile_error!(
-    "enable exactly one backend feature: `rp2040`, `rp2350`, `embassy-rp2040` or `embassy-rp2350`"
-);
-#[cfg(any(
-    all(feature = "rp2040", feature = "rp2350"),
-    all(feature = "rp2040", feature = "embassy-rp2040"),
-    all(feature = "rp2040", feature = "embassy-rp2350"),
-    all(feature = "rp2350", feature = "embassy-rp2040"),
-    all(feature = "rp2350", feature = "embassy-rp2350"),
-    all(feature = "embassy-rp2040", feature = "embassy-rp2350"),
-))]
-compile_error!(
-    "enable exactly one backend feature: `rp2040`, `rp2350`, `embassy-rp2040` or `embassy-rp2350`"
-);
+// The target is a build-time choice on two independent axes, and exactly one of
+// each is needed: the backend family (`rphal` or `embassy`) and the chip
+// (`rp2040` or `rp2350`). Without one there is no HAL to drive the panel; with
+// two of a kind the two HALs collide.
+#[cfg(not(any(feature = "rphal", feature = "embassy")))]
+compile_error!("enable one backend feature: `rphal` or `embassy`");
+#[cfg(all(feature = "rphal", feature = "embassy"))]
+compile_error!("enable exactly one backend feature: `rphal` or `embassy`");
+
+#[cfg(not(any(feature = "rp2040", feature = "rp2350")))]
+compile_error!("enable one chip feature: `rp2040` or `rp2350`");
+#[cfg(all(feature = "rp2040", feature = "rp2350"))]
+compile_error!("enable exactly one chip feature: `rp2040` or `rp2350`");
 
 pub mod backend;
 pub mod descriptor;

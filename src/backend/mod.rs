@@ -16,23 +16,23 @@
 use crate::driver::Hub75Pins;
 use fugit::Rate;
 
-#[cfg(any(feature = "rp2040", feature = "rp2350"))]
+#[cfg(feature = "rphal")]
 mod rphal;
 
 /// The bus-window checks, shared by both backends.
 mod window;
-#[cfg(any(feature = "rp2040", feature = "rp2350"))]
+#[cfg(feature = "rphal")]
 #[doc(inline)]
 pub use rphal::{Hub75Pins8, Hub75Pins16, PioPin, bring_up};
-#[cfg(any(feature = "rp2040", feature = "rp2350"))]
+#[cfg(feature = "rphal")]
 pub(crate) use rphal::{arm, clear_intr};
 
-#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
+#[cfg(feature = "embassy")]
 mod embassy;
-#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
+#[cfg(feature = "embassy")]
 #[doc(inline)]
 pub use embassy::{EmbassyPins, Hub75Pins8, Hub75Pins16, PioPin, bring_up};
-#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
+#[cfg(feature = "embassy")]
 pub(crate) use embassy::{arm, clear_intr};
 
 /// The two PIO stream programs and the `Stream` pairing a program with its
@@ -44,15 +44,17 @@ mod programs;
 #[doc(inline)]
 pub use programs::{Stream, hub75_stream8, hub75_stream16};
 
-#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
+#[cfg(feature = "embassy")]
 pub use embassy_rp as hal;
 /// The HAL this build targets.
 ///
-/// Selected by the `rp2040` or `rp2350` feature (exactly one), so the driver,
-/// the examples, and host code all name one `hal` path.
-#[cfg(feature = "rp2350")]
+/// Selected by the backend and chip features (one of each), so the driver, the
+/// examples, and host code all name one `hal` path. An rp-hal build names the
+/// chip's HAL; an embassy build names `embassy-rp`, whose chip comes from the
+/// chip feature.
+#[cfg(all(feature = "rphal", feature = "rp2350"))]
 pub use rp235x_hal as hal;
-#[cfg(feature = "rp2040")]
+#[cfg(all(feature = "rphal", feature = "rp2040"))]
 pub use rp2040_hal as hal;
 
 /// Programs and observes a DMA channel.
@@ -87,7 +89,7 @@ pub trait ChannelSetup {
     fn al3_trans_count(&self) -> u32;
 }
 
-#[cfg(any(feature = "rp2040", feature = "rp2350"))]
+#[cfg(feature = "rphal")]
 impl<C: hal::dma::SingleChannel> ChannelSetup for C {
     fn id(&self) -> u8 {
         hal::dma::SingleChannel::id(self)
@@ -110,7 +112,7 @@ impl<C: hal::dma::SingleChannel> ChannelSetup for C {
     }
 }
 
-#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
+#[cfg(feature = "embassy")]
 impl ChannelSetup for embassy::DmaChannel {
     fn id(&self) -> u8 {
         self.id()
