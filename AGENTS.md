@@ -19,7 +19,7 @@ Two facts decide most changes:
 
 * A framebuffer word **is** the bus. With `hub75-framebuffer`'s `interstate75`
   layout, bit *n* is pin *n*, so one `out pins, 14` drives the six colour bits,
-  the row address, the latch, and the output enable. See `src/programs.rs`.
+  the row address, the latch, and the output enable. See `src/backend/rphal/programs.rs`.
 * The sequence **is** the frame. The driver plays the framebuffer's own BCM
   sequence from a descriptor table — one entry per run, then a terminator — and
   knows nothing about planes, rows, or their lengths. See `src/descriptor.rs`.
@@ -95,9 +95,10 @@ window, the signal order, and the crystal.
 
 | path | what |
 |---|---|
-| `src/driver.rs` | `Hub75`, `Hub75Config`, `Hub75Pins`, `Hub75Swap`, `PioPin`, `on_dma_irq` |
+| `src/driver.rs` | the engine and the shared driver: `Hub75`, `Hub75Config`, `Hub75Pins`, `Hub75Swap`, `on_dma_irq`, the DMA interrupt, and the divider math |
+| `src/backend/mod.rs` | the HAL port: the single place the backend feature is read, re-exporting the selected HAL as `hal` and the port surface, and defining `ChannelSetup` |
+| `src/backend/rphal.rs` | the `rp2040-hal` / `rp235x-hal` port: `Hub75::new`, `bring_up`, the two pin sets, the stream programs (`hub75_stream16`, `hub75_stream8`) and `Stream`, `PioPin`, and the DMA channel accessors |
 | `src/descriptor.rs` | the engine: the frame as a descriptor table a control channel plays into the data channel's `AL3` block, plus `BusWord` (the framebuffer word's width and DMA `DATA_SIZE`) |
-| `src/programs.rs` | the two PIO stream programs (`hub75_stream16`, `hub75_stream8`) and the `Stream` that pairs a program with its window |
 | `src/pins.rs` | the 16-bit HUB75 word layout as data (`pins`) and the 8-bit one (`pins::latched`), the window's bounds, and the host tests that pin each layout to `hub75-framebuffer` |
 | `.cargo/config-rp2040.toml`, `.cargo/config-rp2350.toml`, `memory-rp2040.x`, `memory-rp2350.x`, `build.rs` | the per-board target, runner and memory map; `build.rs` installs the selected `memory-*.x` as `memory.x` |
 | `examples/` | `gradient`, `telemetry`, `ghost`, `ladder` — every example goes through `Hub75` |
@@ -141,7 +142,7 @@ program or for the drawing convention the examples use: the programs are two PIO
 instructions, and the emulator that used to step it supplied its own state-machine
 configuration, so it could not have caught a driver that configured the machine
 differently; the colour arithmetic now lives in bare-metal examples, which cannot be
-host-tested at all. A change to the panel path in `src/programs.rs` or
+host-tested at all. A change to the panel path in `src/backend/rphal` or
 `src/driver.rs` is unverified until it is flashed; say so rather than implying
 otherwise.
 

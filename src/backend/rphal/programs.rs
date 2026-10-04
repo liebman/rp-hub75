@@ -108,10 +108,6 @@
 use crate::pins;
 use pio::{Program, RP2040_MAX_PROGRAM_SIZE};
 
-/// PIO cycles a word costs: the word and the clock edge, in either clock
-/// polarity.
-pub const CYCLES_PER_WORD: u32 = 2;
-
 /// A stream program together with the window width it writes.
 ///
 /// The program and the `out pins, N` window are one decision — a program that

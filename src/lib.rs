@@ -109,7 +109,7 @@
 //! the latch and the output enable. **One** state machine streams them, one word
 //! per panel column, and the only thing the PIO still generates rather than
 //! copies out of the word is the clock. There is no conversion pass, and nothing
-//! on the CPU touches the panel while the refresh runs. See [`programs`] for the
+//! on the CPU touches the panel while the refresh runs. See [`backend`] for the
 //! program, the pin layout and the one invariant it rests on.
 //!
 //! Feeding that FIFO is [`driver`]'s pair of DMA channels: a **control** channel
@@ -146,8 +146,10 @@ pub mod backend;
 pub mod descriptor;
 pub mod driver;
 pub mod pins;
-pub mod programs;
 
+pub use backend::Hub75Pins8;
+pub use backend::Hub75Pins16;
+pub use backend::PioPin;
 pub use backend::hal;
 
 pub use descriptor::Hub75Descriptors;
@@ -155,10 +157,7 @@ pub use driver::Hub75;
 pub use driver::Hub75Config;
 pub use driver::Hub75Error;
 pub use driver::Hub75Pins;
-pub use driver::Hub75Pins8;
-pub use driver::Hub75Pins16;
 pub use driver::Hub75Swap;
-pub use driver::PioPin;
 pub use driver::on_dma_irq;
 
 /// Framebuffer implementations shared with `esp-hub75`.

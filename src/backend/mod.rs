@@ -15,6 +15,9 @@
 
 #[cfg(any(feature = "rp2040", feature = "rp2350"))]
 mod rphal;
+#[cfg(any(feature = "rp2040", feature = "rp2350"))]
+#[doc(inline)]
+pub use rphal::{BringUp, Hub75Pins8, Hub75Pins16, PioPin, Stream, bring_up};
 
 /// The HAL this build targets.
 ///

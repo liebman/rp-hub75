@@ -30,7 +30,7 @@
 //! signals below are *offsets from the window's first pin*, in bus order. Each
 //! offset is also the bit of a framebuffer word that carries that signal:
 //! `hub75-framebuffer`'s `interstate75` layout puts word bit *n* on window pin
-//! *n* (see [`crate::programs`]).
+//! *n* (see [`crate::backend`]).
 //!
 //! On the Pimoroni Interstate 75 W the window starts at GP0, so every offset
 //! here is also a GPIO number: `R0` is word bit 0 and GP0 at once. That is a
@@ -114,7 +114,7 @@ pub const STB: u8 = 12;
 pub const OE: u8 = 13;
 
 /// Number of pins a framebuffer word drives: one per bit, for PIO
-/// `out pins, 14`. See the `interstate75` layout in [`crate::programs`].
+/// `out pins, 14`. See the `interstate75` layout in [`crate::backend`].
 pub const WORD_PINS: u8 = 14;
 
 /// Word bit that carries each bus signal, in the order [`crate::Hub75Pins16::new`]
