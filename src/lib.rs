@@ -1,5 +1,7 @@
-//! A HUB75 LED matrix driver for the **RP2040** and **RP2350**, developed against
-//! the Pimoroni Interstate 75 W.
+//! A HUB75 LED matrix driver for the **RP2040** and **RP2350**. The Pimoroni
+//! Interstate 75 W is the reference board — the source of the pin map and the
+//! measurements — not a requirement: the pin base, wiring, bus width, and panel
+//! geometry are all parameters.
 //!
 //! The panel is refreshed from PIO plus DMA with no CPU involvement at all,
 //! and the framebuffers come from the [`framebuffer`] crate that backs
