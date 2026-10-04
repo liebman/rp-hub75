@@ -142,19 +142,13 @@ compile_error!("enable exactly one of the `rp2040` and `rp2350` features");
 #[cfg(not(any(feature = "rp2040", feature = "rp2350")))]
 compile_error!("enable one of the `rp2040` and `rp2350` features");
 
+pub mod backend;
 pub mod descriptor;
 pub mod driver;
 pub mod pins;
 pub mod programs;
 
-/// The HAL this build targets.
-///
-/// Selected by the `rp2040` or `rp2350` feature (exactly one), so the driver,
-/// the examples, and host code all name one `hal` path.
-#[cfg(feature = "rp2350")]
-pub use rp235x_hal as hal;
-#[cfg(feature = "rp2040")]
-pub use rp2040_hal as hal;
+pub use backend::hal;
 
 pub use descriptor::Hub75Descriptors;
 pub use driver::Hub75;

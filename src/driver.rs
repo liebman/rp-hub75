@@ -73,10 +73,10 @@ use core::task::Waker;
 use portable_atomic::AtomicBool;
 use portable_atomic::Ordering;
 
+use crate::backend;
 use crate::hal;
 use critical_section::Mutex;
 
-use hal::dma::SingleChannel;
 use hal::fugit::Rate;
 use hal::gpio::DynPinId;
 use hal::gpio::FunctionNull;
@@ -102,20 +102,6 @@ use crate::pins;
 use crate::programs::Stream;
 use crate::programs::hub75_stream8;
 use crate::programs::hub75_stream16;
-
-/// `log2` of the control channel's transfer size: 32-bit descriptor words.
-const DATA_SIZE_WORD: u8 = 2;
-
-/// `RING_SIZE` for the control channel's write pointer: `1 << 3` bytes, the two
-/// words of one `AL3` descriptor block.
-///
-/// The ring wraps the write address on an 8-byte boundary, so every trigger
-/// writes the same two data-channel registers — the whole reason the control
-/// channel needs no per-run address of its own.
-const CONTROL_RING_SIZE_LOG2: u8 = 3;
-
-/// `TREQ_SEL` for a channel nothing paces: it transfers as fast as the bus takes.
-const TREQ_PERMANENT: u8 = 63;
 
 /// PIO cycles one word costs. The panel clock is therefore the word rate.
 const CYCLES_PER_WORD: u32 = crate::programs::CYCLES_PER_WORD;
@@ -870,82 +856,6 @@ pub fn on_dma_irq() {
 // The driver
 // ---------------------------------------------------------------------------
 
-/// Configures the data channel: the one that streams the panel.
-///
-/// Written once, and never touched again — every descriptor the control channel
-/// plays rewrites `READ_ADDR` and `TRANS_COUNT`, and nothing rewrites `CTRL`.
-/// `data_size_log2` is the framebuffer word's `DATA_SIZE` (0 = byte, 1 =
-/// halfword), which the pin set's `Word` decides: an 8-bit latched word is one
-/// byte, a 16-bit direct-drive word a halfword. `control` is the channel that
-/// this one chains to when a run completes, and `IRQ_QUIET` is set so the end of
-/// a run does **not** interrupt: the only interrupt a frame raises is the table's
-/// terminator. (A channel that chains to itself does not chain; the reset value 0
-/// would hand every completion to channel 0 instead.)
-fn new_data_channel<CH: SingleChannel, CCH: SingleChannel>(
-    channel: &CH,
-    control: &CCH,
-    fifo: u32,
-    dreq: u8,
-    data_size_log2: u8,
-) {
-    // SAFETY: the channel belongs to this driver from here on, and these writes
-    // are the only configuration it ever gets.
-    unsafe {
-        let ch = channel.ch();
-        ch.ch_write_addr().write(|w| w.bits(fifo));
-        // `CTRL` through the alias whose trigger is `TRANS_COUNT`, so this
-        // configures without starting anything: the framebuffer's word size,
-        // walk the read address, no ring, paced by the state machine.
-        ch.ch_al1_ctrl().write(|w| {
-            w.data_size().bits(data_size_log2);
-            w.incr_read().set_bit();
-            w.incr_write().clear_bit();
-            w.ring_sel().clear_bit();
-            w.ring_size().bits(0);
-            w.treq_sel().bits(dreq);
-            w.chain_to().bits(control.id());
-            w.irq_quiet().set_bit();
-            w.en().set_bit();
-            w
-        });
-    }
-}
-
-/// Configures the control channel: the one that plays a descriptor table into
-/// the data channel's `AL3` register block.
-///
-/// `target` is the data channel's `AL3_TRANS_COUNT`. The channel walks 32-bit
-/// words from the table, and wraps its write pointer on an 8-byte boundary so
-/// that every block lands on the same two registers. Nothing paces it: it runs
-/// as fast as the bus allows, once per run the data channel completes.
-fn new_control_channel<CH: SingleChannel>(channel: &CH, target: u32) {
-    // SAFETY: the channel belongs to this driver from here on, and these writes
-    // are the only configuration it ever gets.
-    unsafe {
-        let ch = channel.ch();
-        ch.ch_write_addr().write(|w| w.bits(target));
-        // `CTRL` through the alias whose trigger is `TRANS_COUNT`, so this
-        // configures without starting anything: 32-bit words, both addresses
-        // walking, the write address ringed over one descriptor block, no TREQ,
-        // and no chain — the trigger word inside the block is what starts the
-        // data channel, so a chain of its own would start it a second time.
-        ch.ch_al1_ctrl().write(|w| {
-            w.data_size().bits(DATA_SIZE_WORD);
-            w.incr_read().set_bit();
-            w.incr_write().set_bit();
-            w.ring_sel().set_bit();
-            w.ring_size().bits(CONTROL_RING_SIZE_LOG2);
-            w.treq_sel().bits(TREQ_PERMANENT);
-            w.high_priority().set_bit();
-            // A channel that chains to itself does not chain.
-            w.chain_to().bits(channel.id());
-            w.irq_quiet().set_bit();
-            w.en().set_bit();
-            w
-        });
-    }
-}
-
 /// Enables this channel's completion on one of the DMA interrupt lines.
 ///
 /// The `INTEn` registers are distinct types in the PAC, so this routes by address
@@ -1130,8 +1040,8 @@ where
         descriptors: &'static mut Hub75Descriptors<FB, N>,
     ) -> Result<Self, Hub75Error>
     where
-        CH: SingleChannel,
-        CCH: SingleChannel,
+        CH: backend::ChannelSetup,
+        CCH: backend::ChannelSetup,
     {
         if DRIVER_TAKEN.swap(true, Ordering::AcqRel) {
             return Err(Hub75Error::AlreadyInitialised);
@@ -1152,11 +1062,10 @@ where
         // The control channel writes the data channel's `AL3` block: its last
         // word is that block's trigger, so a descriptor is the two words before
         // it and the ring keeps both stores landing there.
-        let target = channel.ch().ch_al3_trans_count().as_ptr() as u32;
-        new_control_channel(&control, target);
-        new_data_channel(
-            &channel,
-            &control,
+        let target = channel.al3_trans_count();
+        control.program_control(target);
+        channel.program_data(
+            control.id(),
             fifo,
             dreq,
             <FB::Word as BusWord>::DATA_SIZE_LOG2,
@@ -1189,8 +1098,8 @@ where
     /// the interrupt is unmasked, and the interrupt is the only writer afterwards.
     #[allow(clippy::too_many_arguments)]
     fn start<const N: usize>(
-        channel: &impl SingleChannel,
-        control: &impl SingleChannel,
+        channel: &impl backend::ChannelSetup,
+        control: &impl backend::ChannelSetup,
         pins: P,
         divider: u16,
         panel_clock: Rate<u32, 1, 1>,
@@ -1204,16 +1113,7 @@ where
         let base = fb as *const FB as u32;
         let channel_id = channel.id();
 
-        // SAFETY: the control channel's registers live for the rest of the
-        // program, and the interrupt writes them from here on. `as_ptr` is safe;
-        // the pointers it returns are only dereferenced in the interrupt.
-        let (control_read_addr, control_trigger) = {
-            let ch = control.ch();
-            (
-                ch.ch_al1_read_addr().as_ptr(),
-                ch.ch_al1_trans_count_trig().as_ptr(),
-            )
-        };
+        let (control_read_addr, control_trigger) = control.trigger_pointers();
 
         let (runs, frame_words) = critical_section::with(|cs| {
             let mut engine = ENGINE.borrow_ref_mut(cs);
