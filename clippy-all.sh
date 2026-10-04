@@ -29,5 +29,10 @@ echo "=========================================="
 cargo clippy-rp2350 --examples
 
 echo "=========================================="
+echo "Clippy (embassy): cargo clippy-embassy --lib --examples"
+echo "=========================================="
+cargo clippy-embassy --lib --examples
+
+echo "=========================================="
 echo "All clippy runs succeeded!"
 echo "=========================================="

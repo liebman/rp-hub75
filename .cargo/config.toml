@@ -1,27 +1,38 @@
 # Cargo configuration: aliases only.
 #
-# There is no default target and no default feature. Every alias names the
-# board's `.cargo/config-*.toml` (target, rustflags, probe runner) and the board
-# feature together, so the target, the HAL and the memory map always change
-# together. Those per-board files are the single place the settings live: cargo
-# *appends* a `--config` file's `rustflags` array to the base config's, so
-# repeating them here would pass `-Tlink.x` twice and define `FLASH` twice.
+# There is no default target and no default feature. The settings that depend on
+# the *chip* — target triple, rustflags, probe runner — live in the per-chip
+# `.cargo/config-rp2040.toml` / `.cargo/config-rp2350.toml`, and each points the
+# linker's `-L` at its own `memory/<chip>/memory.x`. The *feature* picks the HAL,
+# rp-hal or embassy-rp, which is orthogonal: the embassy aliases name the same chip
+# config file as the rp-hal ones. Every alias therefore names a chip config and
+# the features together, and no feature is a default.
+#
+# Those per-chip files are the single place the settings live: cargo *appends* a
+# `--config` file's `rustflags` array to the base config's, so repeating them here
+# would pass `-Tlink.x` twice and define `FLASH` twice.
 #
 # `.cargo/config-rp2350.toml` carries the RP2350 build options, including a
 # RISC-V (Hazard3) alternative.
 
 [alias]
-# Every alias names its board config file and its features. No feature is a
-# default, and the config file is what supplies the board's target, rustflags and
-# probe, so the target and the HAL always change together. Each section lines its
-# options up in columns.
+# Every alias names its chip config file and its features. No feature is a
+# default, and the config file is what supplies the chip's target, rustflags and
+# probe. Each section lines its options up in columns.
 
-# The two boards. `rp2350` is the Interstate 75 W; `rp2040` builds the same
-# driver for the RP2040.
+# The two chips against rp-hal. `rp2350` is the Interstate 75 W; `rp2040` builds
+# the same driver for the RP2040.
 build-rp2350 = "build --config .cargo/config-rp2350.toml --release --features rp2350"
 run-rp2350   = "run   --config .cargo/config-rp2350.toml --release --features rp2350"
 build-rp2040 = "build --config .cargo/config-rp2040.toml --release --features rp2040"
 run-rp2040   = "run   --config .cargo/config-rp2040.toml --release --features rp2040"
+
+# The embassy-rp backend: the same chips, the embassy HAL feature.
+build-embassy        = "build  --config .cargo/config-rp2350.toml --release --features embassy-rp2350"
+run-embassy          = "run    --config .cargo/config-rp2350.toml --release --features embassy-rp2350"
+clippy-embassy       = "clippy --config .cargo/config-rp2350.toml --release --features embassy-rp2350"
+doc-embassy          = "doc    --config .cargo/config-rp2350.toml --no-deps --features embassy-rp2350"
+build-embassy-rp2040 = "build  --config .cargo/config-rp2040.toml --release --features embassy-rp2040"
 
 # The lint, doc and test passes the scripts use; they name the board too, so the
 # scripts carry no flags. The test pass keeps the debug profile: `src/driver.rs`
@@ -37,6 +48,7 @@ run-ladder         = "run --config .cargo/config-rp2350.toml --release --example
 run-latched        = "run --config .cargo/config-rp2350.toml --release --example latched   --features rp2350"
 run-telemetry      = "run --config .cargo/config-rp2350.toml --release --example telemetry --features rp2350"
 run-latched-rp2040 = "run --config .cargo/config-rp2040.toml --release --example latched   --features rp2040"
+run-gradient-embassy = "run --config .cargo/config-rp2350.toml --release --example gradient-embassy --features embassy-rp2350"
 
 [env]
 DEFMT_LOG = "info"

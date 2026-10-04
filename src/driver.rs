@@ -77,7 +77,7 @@ use crate::backend;
 use crate::hal;
 use critical_section::Mutex;
 
-use hal::fugit::Rate;
+use fugit::Rate;
 use hal::pac;
 use hub75_framebuffer::FrameBuffer;
 
@@ -341,9 +341,9 @@ fn line_index(irq: pac::Interrupt) -> Option<u8> {
     match irq {
         pac::Interrupt::DMA_IRQ_0 => Some(0),
         pac::Interrupt::DMA_IRQ_1 => Some(1),
-        #[cfg(feature = "rp2350")]
+        #[cfg(any(feature = "rp2350", feature = "embassy-rp2350"))]
         pac::Interrupt::DMA_IRQ_2 => Some(2),
-        #[cfg(feature = "rp2350")]
+        #[cfg(any(feature = "rp2350", feature = "embassy-rp2350"))]
         pac::Interrupt::DMA_IRQ_3 => Some(3),
         _ => None,
     }
@@ -409,8 +409,7 @@ pub fn on_dma_irq() {
 
         // Acknowledge *our* channel's completion. `INTR` is write-1-to-clear and
         // is not masked by `INTEn`, so this cannot disturb another channel.
-        // SAFETY: the DMA block is a static peripheral.
-        unsafe { (*pac::DMA::ptr()).intr().write(|w| w.bits(engine.flag)) };
+        backend::clear_intr(engine.irq_line, engine.flag);
 
         // Nothing here may log. defmt's `acquire` is a critical section, and this
         // runs once a frame with the picture waiting on it: a logger that blocks,
@@ -429,27 +428,6 @@ pub fn on_dma_irq() {
 // ---------------------------------------------------------------------------
 // The driver
 // ---------------------------------------------------------------------------
-
-/// Enables this channel's completion on one of the DMA interrupt lines.
-///
-/// The `INTEn` registers are distinct types in the PAC, so this routes by address
-/// and sets one bit. The RP2350 has four lines and the RP2040 two; [`line_index`]
-/// only ever returns a line this match handles.
-fn arm(flag: u32, line: u8) {
-    let dma = unsafe { &*pac::DMA::ptr() };
-    let register = match line {
-        0 => dma.inte0().as_ptr(),
-        1 => dma.inte1().as_ptr(),
-        #[cfg(feature = "rp2350")]
-        2 => dma.inte2().as_ptr(),
-        #[cfg(feature = "rp2350")]
-        3 => dma.inte3().as_ptr(),
-        _ => unreachable!("a DMA interrupt line is 0 to 3"),
-    };
-    // SAFETY: one of the DMA's interrupt-enable registers, read-modify-written
-    // once at init.
-    unsafe { register.write_volatile(register.read_volatile() | flag) };
-}
 
 /// Unmasks the DMA interrupt line the driver watches.
 ///
@@ -631,7 +609,7 @@ where
         // Arm the interrupt, then start the chain. The order matters: the first
         // interrupt is a frame boundary, and the control channel's first
         // descriptor is what puts words on the panel.
-        arm(1 << channel_id, irq_line);
+        backend::arm(1 << channel_id, irq_line);
         unmask_interrupt(interrupt);
         critical_section::with(|cs| ENGINE.borrow_ref_mut(cs).restart_chain());
 

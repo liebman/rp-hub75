@@ -135,12 +135,28 @@
 
 #![no_std]
 
-// The target HAL is a build-time choice, and exactly one is needed: without one
-// there is no `hal` to drive the panel, and with both the two crates collide.
-#[cfg(all(feature = "rp2040", feature = "rp2350"))]
-compile_error!("enable exactly one of the `rp2040` and `rp2350` features");
-#[cfg(not(any(feature = "rp2040", feature = "rp2350")))]
-compile_error!("enable one of the `rp2040` and `rp2350` features");
+// The backend is a build-time choice, and exactly one is needed: without one
+// there is no HAL to drive the panel, and with two the two HALs collide.
+#[cfg(not(any(
+    feature = "rp2040",
+    feature = "rp2350",
+    feature = "embassy-rp2040",
+    feature = "embassy-rp2350"
+)))]
+compile_error!(
+    "enable exactly one backend feature: `rp2040`, `rp2350`, `embassy-rp2040` or `embassy-rp2350`"
+);
+#[cfg(any(
+    all(feature = "rp2040", feature = "rp2350"),
+    all(feature = "rp2040", feature = "embassy-rp2040"),
+    all(feature = "rp2040", feature = "embassy-rp2350"),
+    all(feature = "rp2350", feature = "embassy-rp2040"),
+    all(feature = "rp2350", feature = "embassy-rp2350"),
+    all(feature = "embassy-rp2040", feature = "embassy-rp2350"),
+))]
+compile_error!(
+    "enable exactly one backend feature: `rp2040`, `rp2350`, `embassy-rp2040` or `embassy-rp2350`"
+);
 
 pub mod backend;
 pub mod descriptor;

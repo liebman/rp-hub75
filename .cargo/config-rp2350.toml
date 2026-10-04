@@ -1,11 +1,10 @@
 # RP2350 (Cortex-M33) build configuration.
 #
 # Selected with `--config .cargo/config-rp2350.toml` (the aliases in
-# `.cargo/config.toml` do this) together with `--features rp2350`, mirroring
-# `config-rp2040.toml`. No feature is a default, so the config file and the
-# feature are always named together. This is the only place the RP2350's target,
-# rustflags and runner live: cargo appends a `--config` file's `rustflags` to the
-# base config's, so a copy in `.cargo/config.toml` would pass `-Tlink.x` twice.
+# `.cargo/config.toml` do this) together with the `rp2350` or `embassy-rp2350`
+# feature. The feature picks the HAL; this file, and the memory map it points the
+# linker at, are the chip's. Cargo appends a `--config` file's `rustflags` to the
+# base config's, so the settings live here and not in `.cargo/config.toml`.
 #
 # The RP2350 has two Cortex-M33 cores, so the default is the hard-float Arm
 # target. A RISC-V (Hazard3) build is possible with
@@ -17,9 +16,12 @@ target = "thumbv8m.main-none-eabihf"
 
 [target.thumbv8m.main-none-eabihf]
 rustflags = [
+    # The chip's memory map, named `memory.x` for `link.x`'s `INCLUDE memory.x`.
+    # It must precede `-Tlink.x` so the linker's search path holds it in time.
+    "-C", "link-arg=-Lmemory/rp2350",
     # --nmagic turns off page alignment of sections (saves flash)
     "-C", "link-arg=--nmagic",
-    # link.x comes from cortex-m-rt, which pulls in our memory.x
+    # link.x comes from cortex-m-rt, and pulls in memory.x from the path above
     "-C", "link-arg=-Tlink.x",
     # defmt.x places the .defmt sections and provides the logger symbols. defmt's
     # own build script only adds the search path for this script; passing it is

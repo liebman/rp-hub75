@@ -30,5 +30,15 @@ echo "=========================================="
 cargo build-rp2350 --examples
 
 echo "=========================================="
+echo "Building (embassy): cargo build-embassy"
+echo "=========================================="
+cargo build-embassy
+
+echo "=========================================="
+echo "Building (embassy example): cargo build-embassy --example gradient-embassy"
+echo "=========================================="
+cargo build-embassy --example gradient-embassy
+
+echo "=========================================="
 echo "All builds succeeded!"
 echo "=========================================="

@@ -13,12 +13,39 @@
 //! while `embassy-rp` exposes `Channel::regs` and `Channel::number`. That one
 //! difference is [`ChannelSetup`], implemented once per backend.
 
+use crate::driver::Hub75Pins;
+use fugit::Rate;
+
 #[cfg(any(feature = "rp2040", feature = "rp2350"))]
 mod rphal;
+
+/// The bus-window checks, shared by both backends.
+mod window;
 #[cfg(any(feature = "rp2040", feature = "rp2350"))]
 #[doc(inline)]
-pub use rphal::{BringUp, Hub75Pins8, Hub75Pins16, PioPin, Stream, bring_up};
+pub use rphal::{Hub75Pins8, Hub75Pins16, PioPin, bring_up};
+#[cfg(any(feature = "rp2040", feature = "rp2350"))]
+pub(crate) use rphal::{arm, clear_intr};
 
+#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
+mod embassy;
+#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
+#[doc(inline)]
+pub use embassy::{EmbassyPins, Hub75Pins8, Hub75Pins16, PioPin, bring_up};
+#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
+pub(crate) use embassy::{arm, clear_intr};
+
+/// The two PIO stream programs and the `Stream` pairing a program with its
+/// window.
+///
+/// Shared by both backends: they use the same `pio` crate version, so a
+/// `pio::pio_asm!` program is the same type for either.
+mod programs;
+#[doc(inline)]
+pub use programs::{Stream, hub75_stream8, hub75_stream16};
+
+#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
+pub use embassy_rp as hal;
 /// The HAL this build targets.
 ///
 /// Selected by the `rp2040` or `rp2350` feature (exactly one), so the driver,
@@ -81,4 +108,42 @@ impl<C: hal::dma::SingleChannel> ChannelSetup for C {
     fn al3_trans_count(&self) -> u32 {
         rphal::al3_trans_count(self)
     }
+}
+
+#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
+impl ChannelSetup for embassy::DmaChannel {
+    fn id(&self) -> u8 {
+        self.id()
+    }
+
+    fn program_data(&self, control: u8, fifo: u32, dreq: u8, data_size_log2: u8) {
+        embassy::program_data(self, control, fifo, dreq, data_size_log2);
+    }
+
+    fn program_control(&self, target: u32) {
+        embassy::program_control(self, target);
+    }
+
+    fn trigger_pointers(&self) -> (*mut u32, *mut u32) {
+        embassy::trigger_pointers(self)
+    }
+
+    fn al3_trans_count(&self) -> u32 {
+        embassy::al3_trans_count(self)
+    }
+}
+
+/// What a backend's `bring_up` returns: the started state machine's handoff to
+/// the two DMA channels.
+pub struct BringUp<P: Hub75Pins> {
+    /// The panel pins, converted and held so nothing else can claim the bus.
+    pub pins: P,
+    /// The PIO clock divider in use.
+    pub divider: u16,
+    /// The panel clock actually achieved: the request rounded to a divider.
+    pub panel_clock: Rate<u32, 1, 1>,
+    /// The state machine's FIFO, which is the data channel's write address.
+    pub fifo: u32,
+    /// The state machine's TX DREQ, which paces the data channel.
+    pub dreq: u8,
 }

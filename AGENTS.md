@@ -19,7 +19,7 @@ Two facts decide most changes:
 
 * A framebuffer word **is** the bus. With `hub75-framebuffer`'s `interstate75`
   layout, bit *n* is pin *n*, so one `out pins, 14` drives the six colour bits,
-  the row address, the latch, and the output enable. See `src/backend/rphal/programs.rs`.
+  the row address, the latch, and the output enable. See `src/backend/programs.rs`.
 * The sequence **is** the frame. The driver plays the framebuffer's own BCM
   sequence from a descriptor table — one entry per run, then a terminator — and
   knows nothing about planes, rows, or their lengths. See `src/descriptor.rs`.
@@ -70,12 +70,26 @@ wiring.
 
 ### The target
 
-The HAL is a build-time choice: the `rp2040` or `rp2350` feature (exactly one,
-and neither is a default) selects `rp2040-hal` or `rp235x-hal`, re-exported as
-`rp_hub75::hal`. Keep the driver and examples naming `crate::hal` / `rp_hub75::hal`
-rather than a HAL crate directly. The RP2040 has two DMA interrupt lines, not four,
-and no atomic compare-and-swap; both are handled in `src/driver.rs` and in
-`Cargo.toml` (see the `rp2040` notes there).
+The backend is a build-time choice, and exactly one of four features selects it:
+`rp2040` or `rp2350` builds against `rp2040-hal` / `rp235x-hal`, and
+`embassy-rp2040` or `embassy-rp2350` builds against `embassy-rp`. All four are
+re-exported as `rp_hub75::hal`, so the driver and examples name `crate::hal` /
+`rp_hub75::hal` rather than a HAL crate directly. `src/backend/mod.rs` is the one
+place the choice is read: it re-exports the selected HAL, the pin sets, the PIO
+bring-up and the DMA helpers, and defines `ChannelSetup`, the single trait the
+differing DMA-channel accessors need. `src/driver.rs`, `src/descriptor.rs` and
+`src/pins.rs` carry no `#[cfg(feature = ...)]`.
+
+The two `rp-hal` parts share `rp-hal-common`; `embassy-rp` uses the same PAC
+register block and the same `pio` crate version, so the stream programs are shared
+(`src/backend/programs.rs`). Each backend's `Hub75::new` takes its own peripheral
+types — they differ enough (a `Pio` owns the state machines; a DMA channel is a
+`ChannelInstance`) that no one signature fits both. `on_dma_irq` and
+`wait_for_done` are backend- and executor-agnostic.
+
+The RP2040 has two DMA interrupt lines, not four, and no atomic compare-and-swap;
+both are handled in `src/driver.rs` and in `Cargo.toml` (see the `rp2040` notes
+there).
 
 GP0–GP13 is the reference wiring and the examples' default, the clock being GP11.
 The base is 0 there, so nothing about the reference board changed; a non-zero base
@@ -97,11 +111,15 @@ window, the signal order, and the crystal.
 |---|---|
 | `src/driver.rs` | the engine and the shared driver: `Hub75`, `Hub75Config`, `Hub75Pins`, `Hub75Swap`, `on_dma_irq`, the DMA interrupt, and the divider math |
 | `src/backend/mod.rs` | the HAL port: the single place the backend feature is read, re-exporting the selected HAL as `hal` and the port surface, and defining `ChannelSetup` |
-| `src/backend/rphal.rs` | the `rp2040-hal` / `rp235x-hal` port: `Hub75::new`, `bring_up`, the two pin sets, the stream programs (`hub75_stream16`, `hub75_stream8`) and `Stream`, `PioPin`, and the DMA channel accessors |
+| `src/backend/rphal.rs` | the `rp2040-hal` / `rp235x-hal` port: `Hub75::new`, `bring_up`, the two pin sets (`Hub75Pins16`/`Hub75Pins8`), `PioPin`, and the DMA channel accessors |
+| `src/backend/embassy.rs` | the `embassy-rp` port: `Hub75::new`, `bring_up`, `Hub75Pins16`/`Hub75Pins8` (holding PIO `Pin`s), `EmbassyPins`, and the DMA channel accessors |
+| `src/backend/programs.rs` | the two PIO stream programs (`hub75_stream16`, `hub75_stream8`) and `Stream`, shared by both backends (they use the same `pio` crate) |
+| `src/backend/window.rs` | the bus-window checks (`check_bus`, `check_bus8`), shared by both backends |
 | `src/descriptor.rs` | the engine: the frame as a descriptor table a control channel plays into the data channel's `AL3` block, plus `BusWord` (the framebuffer word's width and DMA `DATA_SIZE`) |
 | `src/pins.rs` | the 16-bit HUB75 word layout as data (`pins`) and the 8-bit one (`pins::latched`), the window's bounds, and the host tests that pin each layout to `hub75-framebuffer` |
-| `.cargo/config-rp2040.toml`, `.cargo/config-rp2350.toml`, `memory-rp2040.x`, `memory-rp2350.x`, `build.rs` | the per-board target, runner and memory map; `build.rs` installs the selected `memory-*.x` as `memory.x` |
-| `examples/` | `gradient`, `telemetry`, `ghost`, `ladder` — every example goes through `Hub75` |
+| `.cargo/config-rp2040.toml`, `.cargo/config-rp2350.toml` | the per-chip target, runner, and the `-L` path to the chip's `memory.x`; the chip config is shared by both HALs |
+| `memory/rp2040/memory.x`, `memory/rp2350/memory.x` | the linker memory maps, each named `memory.x` so `link.x`'s `INCLUDE memory.x` finds the chip's |
+| `examples/` | `gradient`, `telemetry`, `ghost`, `ladder`, `latched` (rp-hal) and `gradient-embassy` (embassy-rp) — every example goes through `Hub75` |
 | `NOTES.md` | measurements, datasheet facts, and the reasoning: the design record |
 | `plan.md` | milestones: what is done, in progress, and next |
 | `README.md` | orientation for a human reader |
@@ -127,6 +145,7 @@ lines: each one is shaped around the bare-metal target.
 | `./fmt-all.sh` | `cargo fmt --all`, then `--check`. Do not add a `rustfmt.toml` without agreeing on it. |
 | `cargo run-rp2350 --example gradient` | Builds, flashes and runs over the debug probe (`probe-rs run --chip RP235x`), and streams the `defmt` log back on the same terminal. Without a probe, flash over the USB-C bootloader instead: hold BOOT, tap RESET, `picotool load -u -v -x -t elf <elf>`. |
 | `cargo build-rp2040` / `cargo run-rp2040` (e.g. `--example latched`) | The same, for the RP2040: the alias names `.cargo/config-rp2040.toml` (target `thumbv6m-none-eabi`, `probe-rs run --chip RP2040`) and the `rp2040` feature; neither board feature is a default. `build-rp2350`/`run-rp2350` are the symmetric names. |
+| `cargo build-embassy` / `cargo run-embassy` | The embassy-rp backend: the aliases name the RP2350 chip config (`.cargo/config-rp2350.toml`, the same target and probe the rp-hal build uses) and the `embassy-rp2350` feature. `cargo run-embassy --example gradient-embassy` (or the `run-gradient-embassy` alias) flashes and runs the embassy example. |
 | `cargo doc-rp2350` | Checks that the documentation builds (the alias names the board and the `--no-deps` flag). A `rustdoc` warning is a bug — nothing denies them here, and there is no `cargo xtask` in this crate. |
 
 There is no CI and no `.github/`. Whatever a change claims is verified, you ran.
