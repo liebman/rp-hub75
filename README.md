@@ -7,11 +7,7 @@ measurements come from, and the (64×64, 1/32 scan) panel the examples default t
 the panel geometry are all parameters.
 
 One PIO state machine streams a `hub75-framebuffer` bitplane framebuffer straight
-at the panel, and one interrupt a frame is all the CPU does about it. A **control**
-DMA channel plays a descriptor table — the framebuffer's own BCM sequence, one
-entry per run, then a terminator — into the data channel's `AL3` register block,
-and the data channel chains back to it on every completion. The sequence *is* the
-frame, so the driver knows nothing about planes or rows.
+at the panel, and the CPU does nothing else: one interrupt a frame.
 
 ```rust
 let hub75 = Hub75::new(pio, ch0, ch1, &mut resets, pins, clocks.system_clock.freq(),
@@ -29,8 +25,8 @@ loop {
 
 * A framebuffer word *is* the bus: with `hub75-framebuffer`'s `interstate75`
   layout, bit *n* is pin *n*, so one PIO `out pins, 14` drives the six colour
-  bits, the row address, the latch and the output enable. No conversion pass —
-  see [`programs`](src/backend/programs.rs). The clock is the exception: the PIO
+  bits, the row address, the latch and the output enable — no conversion pass
+  ([`programs`](src/backend/programs.rs)). The clock is the exception: the PIO
   generates it with a side-set, so it is the one pin specified apart from the
   window (`Hub75Pins16::new`'s last argument) and the one word bit
   (`pins::RESERVED`) that carries no signal. The **8-bit latched** bus is the same
@@ -43,28 +39,21 @@ loop {
   — into the data channel's `AL3` register block, and the data channel chains back
   to it on completion ([`descriptor`](src/descriptor.rs)). The chain re-arms itself
   as often as the frame needs, so a `reps` count costs a table entry rather than an
-  interrupt: there is no ring size, no alignment rule and no power-of-two rule
-  anywhere. Nothing in the driver knows what a plane or a row is, or how long one
-  is, so plane-major, row-major, threshold and remapped framebuffers all work — the
-  layout only changes the cost. The table itself is **the caller's storage**:
-  `hub75_descriptors!(Fb)` sizes a `static` to the frame's own length (33 entries,
-  268 bytes, for a six-plane plane-major frame) and the driver keeps only a pointer,
-  so its own static is 44 bytes.
+  interrupt, and there is no ring size, alignment rule or power-of-two rule
+  anywhere. Nothing in the driver knows what a plane or a row is, so plane-major,
+  row-major, threshold and remapped framebuffers all work — the layout only changes
+  the cost. The table is **the caller's storage**: `hub75_descriptors!(Fb)` sizes a
+  `static` to the frame's own length and the driver keeps only a pointer.
 * **One interrupt a frame.** It is the table's terminator, at the boundary, and it
-  depends neither on the layout (32 runs a refresh plane-major, 1024 row-major for
-  this panel) nor on where the linker put the framebuffer: 73/s at the examples' 10
-  MHz setting, measured. A blocked interrupt delays a frame boundary; it cannot
-  corrupt the picture.
+  depends neither on the layout nor on where the linker put the framebuffer. A
+  blocked interrupt delays a frame boundary; it cannot corrupt the picture.
 * A framebuffer swap is **one delta**: the incoming buffer differs from the one on
   the panel by a single number, and the interrupt adds it to the table's addresses
-  at the boundary — one store per run, on the frames that swap and no others. No
-  tearing, no memcpy, and `swap().wait()` hands the outgoing buffer back.
-* Six planes is 63 panel scans a refresh, so the frame is the panel clock over
-  129 024 words: 13.8 ms (≈72 Hz) at the examples' default 10 MHz, and 6.9 ms
-  (≈145 Hz) with the `20mhz` feature, which the divider rounds to 18.75 MHz.
-  Eight planes flickers at this clock, which is why the examples draw at six;
-  the depth is the framebuffer's `PLANES`, not a driver constant. The crate docs
-  have the geometry-to-framebuffer mapping.
+  at the boundary, on the frames that swap and no others. No tearing, no memcpy,
+  and `swap().wait()` hands the outgoing buffer back.
+* Six planes is 63 panel scans a refresh, which is why the examples draw at six;
+  eight flickers at this clock. The depth is the framebuffer's `PLANES`, not a
+  driver constant. The crate docs have the geometry-to-framebuffer mapping.
 
 ## Cargo features
 
@@ -155,16 +144,12 @@ them. Neither dependency's own defmt feature can be turned on — the hal wants
 ## Status
 
 The engine is the descriptor one, and it is flashed: 32 runs a refresh played by a
-control channel, **one interrupt a frame**, `irqs` == `swap_waited` == `frames` at
-73/s measured (`telemetry`, two minutes), with `gradient` and `ghost` flashed and
-looking right — straight colour ramps and no row or column bleed. The per-run
-engine it replaced measured 985/s on the same panel: 13.5 interrupts a refresh,
-where its own banner said 17, because the ring it used depended on where the linker
-put the framebuffers. Neither that engine nor the ring is in the crate any more.
-The ladder has now been read off the panel — all five rungs as they should be,
-which closes the ladder's read-back and settles the latch edge (this panel takes
-the row on `STB`'s falling edge) and the R0/G0/B0 colour order. What is still
-unverified is the panel clock ceiling: the ladder at a faster divider, and an
+control channel, **one interrupt a frame**, with `irqs` == `swap_waited` == `frames`
+and `gradient` and `ghost` looking right — straight colour ramps and no row or
+column bleed. The ladder has been read off the panel — all five rungs as they
+should be, which closes the ladder's read-back and settles the latch edge (this
+panel takes the row on `STB`'s falling edge) and the R0/G0/B0 colour order. What is
+still unverified is the panel clock ceiling: the ladder at a faster divider, and an
 analyser for the number.
 
 The **8-bit latched** path and the **RP2040** build are new and compiled — the

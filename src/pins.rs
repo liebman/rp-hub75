@@ -3,9 +3,9 @@
 //!
 //! ## The word layout
 //!
-//! A HUB75 bus needs **fourteen** driven signals, and with
-//! `hub75-framebuffer`'s `interstate75` feature one framebuffer word carries all
-//! of them, one bit per signal, in this order:
+//! A HUB75 bus needs **fourteen** driven signals, and with `hub75-framebuffer`'s
+//! `interstate75` feature one framebuffer word carries all of them, one bit per
+//! signal, in this order:
 //!
 //! | word bit | signal |
 //! |---|---|
@@ -17,61 +17,50 @@
 //! | 13 | `OE`, the output enable, active low |
 //!
 //! [`LAYOUT`] states that mapping as data, in the order [`crate::Hub75Pins16::new`]
-//! takes the pins, and that constructor checks the wiring against it. The colours
-//! and the address are the *framebuffer's* — this crate never reads a pixel — so
-//! the values here are the contract between the two crates rather than an input
-//! to the stream program. Every constant below is pinned to that contract at
-//! compile time, against the `pinmap` module `hub75-framebuffer` exports, so a
-//! change to the dependency's layout stops the build. [`RESERVED`] is the one bit
-//! the framebuffer always leaves at zero, which is what decides where the clock
-//! may be wired.
+//! takes the pins, and that constructor checks the wiring against it. The values
+//! are the contract between this crate and `hub75-framebuffer` rather than an input
+//! to the stream program, and every constant below is pinned to that contract at
+//! compile time against the `pinmap` module the dependency exports, so a layout
+//! change stops the build.
 //!
 //! ## The pin window
 //!
 //! A HUB75 bus needs **fourteen consecutive** GPIOs. `out pins, 14` writes
-//! `[base, base + 13]` and no PIO instruction can move that window, so the
-//! signals below are *offsets from the window's first pin*, in bus order. Each
-//! offset is also the bit of a framebuffer word that carries that signal:
-//! `hub75-framebuffer`'s `interstate75` layout puts word bit *n* on window pin
-//! *n* (see [`crate::backend`]).
+//! `[base, base + 13]` and no PIO instruction can move that window, so the signals
+//! below are *offsets from the window's first pin*, in bus order, and each offset
+//! is also the framebuffer word bit that carries the signal.
 //!
-//! On the Pimoroni Interstate 75 W the window starts at GP0, so every offset
-//! here is also a GPIO number: `R0` is word bit 0 and GP0 at once. That is a
-//! property of that board's wiring, not of the bus. Another run of fourteen
-//! GPIOs uses these same offsets with a different base, which
-//! [`Hub75Pins16::new`](crate::Hub75Pins16::new) derives from the *lowest* pin it is
-//! given; [`MAX_WORD_BASE`] is where such a window may start at the latest.
+//! On the Pimoroni Interstate 75 W the window starts at GP0, so every offset here
+//! is also a GPIO number: `R0` is word bit 0 and GP0 at once. That is that board's
+//! wiring, not the bus: another run of fourteen GPIOs uses the same offsets with a
+//! different base, which [`Hub75Pins16::new`](crate::Hub75Pins16::new) derives from
+//! the *lowest* pin it is given. [`MAX_WORD_BASE`] is where such a window may start
+//! at the latest.
 //!
 //! ## The clock
 //!
 //! The clock is the one signal the PIO *generates* rather than copies out of a
 //! word: a side-set drives it, and the side-set has a pin base of its own
-//! (`SM_PINCTRL`'s `SIDESET_BASE`), independent of the `out` window. The pin it
-//! is wired to is therefore an argument of
-//! [`Hub75Pins16::new`](crate::Hub75Pins16::new) rather than a position in the bus
-//! order, and it may be any PIO-reachable GPIO: the window pin at [`RESERVED`],
-//! where the framebuffer holds bit 11 at zero so the two writes agree, or a pin
-//! outside the window entirely, in which case the reserved pin is left unwired.
-//!
-//! A clock on any *other* window pin is refused, because the side-set takes
-//! precedence over an `out` on an overlapping pin (RP2350 datasheet §11.5.6) and
-//! would silently overwrite that signal on every cycle.
+//! (`SM_PINCTRL`'s `SIDESET_BASE`), independent of the `out` window. Its pin is
+//! therefore an argument of [`Hub75Pins16::new`](crate::Hub75Pins16::new) rather
+//! than a position in the bus order, and it may be any PIO-reachable GPIO: the
+//! window pin at [`RESERVED`], where the framebuffer holds bit 11 at zero so the
+//! two writes agree, or a pin outside the window entirely, in which case the
+//! reserved pin is left unwired. The side-set takes precedence on an overlapping
+//! pin, so a clock on any other window pin is refused.
 //!
 //! The clock's polarity is the pad's, not the program's: a panel that takes the
-//! column on the falling edge gets that edge by inverting the clock pin's output
-//! in the GPIO block (the crate's `invert-clock` feature), not from a second
-//! program.
+//! column on the falling edge gets that edge by inverting the clock pin's output in
+//! the GPIO block (the crate's `invert-clock` feature), not from a second program.
 //!
 //! The values come from Pimoroni's HUB75 driver (`pimoroni-pico`,
-//! `drivers/hub75/hub75.hpp`), whose pin definitions are the same for the
-//! RP2040 and RP2350 boards, and were confirmed on hardware with
-//! `tools/panel_bringup.py` before any Rust was written.
+//! `drivers/hub75/hub75.hpp`), whose pin definitions are the same for the RP2040
+//! and RP2350 boards.
 //!
 //! ## Logging
 //!
-//! The bus occupies GP0–GP13 on the reference board, which means GP0/GP1 (the
-//! default UART0 TX/RX) are **not** available for logging: use USB CDC, or
-//! SWD/RTT with a debug probe.
+//! The bus occupies GP0–GP13 on the reference board, so GP0/GP1 (the default UART0
+//! TX/RX) are not available for logging: use USB CDC, or SWD/RTT with a probe.
 
 /// Red data, top half of the panel. Word bit 0.
 pub const R0: u8 = 0;

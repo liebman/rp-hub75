@@ -1,17 +1,14 @@
 //! The engine: the frame as a DMA descriptor table, played by a second channel.
 //!
-//! A **control** DMA channel reads this table and writes each entry into the data
-//! channel's `AL3` register block, whose last word (`AL3_READ_ADDR_TRIG`)
-//! triggers the run it describes. The data channel chains back to the control
-//! channel when the run completes, so the two hand the picture to each other
-//! without the CPU (the diagram is in [`crate::driver`]).
+//! A **control** DMA channel writes each two-word entry into the data channel's
+//! `AL3` register block; the block's last word (`AL3_READ_ADDR_TRIG`) triggers the
+//! run it describes, and the data channel chains back to the control channel when
+//! the run completes. The hand-off diagram is in [`crate::driver`].
 //!
-//! `AL3` is the register block whose trigger word is the last of the two words a
-//! run needs, so a descriptor is exactly two words ([`Descriptor`]) and the data
-//! channel's `CTRL` is written once at startup. Nothing about a run is
-//! configurable per run, which is the point: a segment the crate asks for `reps`
-//! times is materialised `reps` times, so this engine has no ring size, no
-//! alignment rule and no power-of-two rule anywhere.
+//! A descriptor is exactly two words ([`Descriptor`]), and the data channel's
+//! `CTRL` is written once at startup: nothing about a run is configurable per run,
+//! so a segment asked for `reps` times is materialised `reps` times. There is no
+//! ring size, alignment rule or power-of-two rule anywhere.
 //!
 //! # One interrupt per frame
 //!
@@ -19,28 +16,25 @@
 //! Zero is not a trigger, so it starts nothing, and the data channel runs with
 //! `IRQ_QUIET` set — RP2350 datasheet §12.6, *"an IRQ is raised when NULL is
 //! written to a trigger register, indicating the end of a control block chain"*.
-//! One refresh is therefore one interrupt, and by the time it runs the control
-//! channel has stopped at the terminator.
+//! One refresh is therefore one interrupt, raised once the control channel has
+//! stopped at the terminator.
 //!
 //! # The table is a frame, materialised
 //!
-//! One refresh is the sum of `reps` runs, so the table holds that many
-//! descriptors plus the terminator, and [`descriptor_count`] sizes it at compile
-//! time without a framebuffer instance. The storage itself is the caller's, made
-//! by [`hub75_descriptors!`](crate::hub75_descriptors): the driver is handed a
-//! pointer and keeps nothing larger than that. The count is the layout's cost and
-//! not the panel's: 32 runs for a six-plane plane-major frame at any geometry, and
-//! `32 × NROWS` for the row-major layout. Nor is it the *buffer's*: an entry
-//! names its own address, so the count is the same whichever framebuffer is on
-//! the panel.
+//! One refresh is the sum of `reps` runs, so the table holds that many descriptors
+//! plus the terminator, and [`descriptor_count`] sizes it at compile time without a
+//! framebuffer instance. The storage is the caller's, made by
+//! [`hub75_descriptors!`](crate::hub75_descriptors): the driver keeps a pointer and
+//! nothing larger. The count is the layout's cost, not the panel's: 32 runs for a
+//! six-plane plane-major frame at any geometry, `32 × NROWS` for row-major.
 //!
 //! # The swap is a delta, applied in place
 //!
 //! A descriptor holds an absolute address, because the DMA writes each word
 //! straight into the data channel's `READ_ADDR` and nothing adds a base. Both
-//! framebuffers of a double-buffered driver have the same layout, so a swap is
-//! still one number: the interrupt adds it to every run's address through
-//! [`patch`] before it restarts the chain. The terminator is never patched.
+//! framebuffers have the same layout, so a swap is one number: the interrupt adds
+//! it to every run's address through [`patch`] before restarting the chain. The
+//! terminator is never patched.
 
 use core::marker::PhantomData;
 use hub75_framebuffer::BcmLenReps;

@@ -4,10 +4,10 @@
 //! # What runs the panel
 //!
 //! A single state machine streams framebuffer words straight at the HUB75 pin
-//! window (see [`crate::backend`]), the reference board's being GP0-13. A
-//! **control** DMA channel plays a [`crate::descriptor`] table into the data
-//! channel's `AL3` register block, and the data channel chains back to it on
-//! every completion, so the two hand the picture to each other in hardware:
+//! window (see [`crate::backend`]). A **control** DMA channel plays a
+//! [`crate::descriptor`] table into the data channel's `AL3` register block, and
+//! the data channel chains back to it on every completion, so the two hand the
+//! picture to each other in hardware:
 //!
 //! ```text
 //! control channel  (trans_count, read_addr) → the data channel's AL3 block
@@ -17,37 +17,12 @@
 //! ```
 //!
 //! The table is the framebuffer's own BCM sequence, materialised by
-//! [`crate::descriptor::fill`]: one entry per repetition of every segment, in
-//! scan order, then a terminator. Nothing here knows what a plane or a row is: a
-//! plane-major (`bitplane::plain::frame`), a row-major (`bitplane::plain::row`),
-//! a threshold or a remapped framebuffer all drive the same code, with the same
-//! swap, and the layout only changes the *cost*, which
-//! [`Hub75::runs_per_refresh`] reports.
-//!
-//! # One interrupt per frame
-//!
-//! The only interrupt is the terminator's: zero in a trigger register starts
-//! nothing, and on the quiet data channel it releases the one deferred interrupt.
-//! The CPU therefore wakes **once per frame** — at the boundary, where the chain
-//! has stopped and the swap belongs — and the rate depends neither on the layout
-//! (32 runs a refresh plane-major, 1024 row-major for these panels) nor on where
-//! the linker put the framebuffer, because an entry carries its own address.
-//!
-//! Between boundaries the CPU is free: the chain re-arms itself as often as the
-//! frame needs, and a `reps` count costs an entry in the table rather than a run
-//! of its own, so no ring size, alignment or power-of-two rule appears anywhere.
-//!
-//! # Double buffering
-//!
-//! [`Hub75::swap`] takes the incoming framebuffer and remembers the *delta*
-//! between it and the one on the panel. Both buffers have the same type and
-//! therefore the same layout, so a swap is one number, applied by the interrupt at
-//! the next frame boundary. The incoming frame starts exactly then, the outgoing
-//! buffer is unreferenced at that instant, and [`Hub75Swap::wait`] hands it back.
-//!
-//! A descriptor names an absolute address, so the interrupt applies the delta
-//! through [`crate::descriptor::patch`] — one store per run, on the frames that
-//! swap and no others — and then restarts the chain.
+//! [`crate::descriptor::fill`], and nothing here knows what a plane or a row is:
+//! plane-major, row-major, threshold and remapped framebuffers all drive the same
+//! code, with the layout only changing the *cost*, which
+//! [`Hub75::runs_per_refresh`] reports. [`crate::descriptor`] has the table's
+//! shape, the terminator that gives one interrupt a frame, and the delta a swap
+//! applies.
 //!
 //! # The interrupt
 //!
@@ -59,11 +34,11 @@
 //! extern "C" fn DMA_IRQ_1() { rp_hub75::on_dma_irq(); }
 //! ```
 //!
-//! (the handler *is* the vector-table symbol: `rp235x-hal` does not re-export
+//! The handler *is* the vector-table symbol: `rp235x-hal` does not re-export
 //! `cortex_m_rt::interrupt`, and that macro in device mode wants a crate named
-//! `interrupt` this PAC does not provide). The line is named in
-//! [`Hub75Config::new`], which is the only way the driver knows which one to
-//! unmask — the two must agree, and a mismatch simply means nothing moves.
+//! `interrupt` this PAC does not provide. The line is named in
+//! [`Hub75Config::new`] — the only way the driver knows which one to unmask; a
+//! mismatch means nothing moves.
 
 use core::cell::Cell;
 use core::cell::RefCell;
@@ -137,13 +112,9 @@ pub struct Hub75Config {
 
 impl Hub75Config {
     /// The recommended configuration: an 18.75 MHz panel clock and `interrupt`
-    /// as the wake-up line.
-    ///
-    /// 18.75 MHz is 150 MHz / 4 / 2: a word every two PIO cycles. The refresh
-    /// rate then follows the *layout* — one refresh is the framebuffer's whole
-    /// BCM sequence — so [`Hub75::refresh_hz`] reports what a given clock
-    /// actually gives. It is also below 20 MHz, which keeps the clock legible on
-    /// a logic analyser.
+    /// as the wake-up line, which is 150 MHz / 4 / 2 — a word every two PIO
+    /// cycles, and a refresh rate that follows the framebuffer's own sequence
+    /// ([`Hub75::refresh_hz`]).
     #[must_use]
     pub const fn new(interrupt: pac::Interrupt) -> Self {
         Self {
@@ -154,10 +125,9 @@ impl Hub75Config {
 
     /// Sets the panel shift clock. See [`Hub75Config::new`].
     ///
-    /// The clock is a ceiling. The PIO divider is an integer and is rounded up, so
-    /// a request no divider hits exactly runs the panel at the next slower clock
-    /// rather than faster than the panel is rated for;
-    /// [`Hub75::panel_clock`] reports what was achieved.
+    /// The clock is a ceiling: the PIO divider is rounded up, so the panel runs at
+    /// the requested clock or the next slower one ([`Hub75::panel_clock`] reports
+    /// which).
     #[must_use]
     pub const fn with_panel_clock(mut self, panel_clock: Rate<u32, 1, 1>) -> Self {
         self.panel_clock = panel_clock;
@@ -212,9 +182,8 @@ pub trait Hub75Pins: 'static {
 
     /// Inverts the clock pin's output in the GPIO block.
     ///
-    /// A panel that takes the column on the clock's falling edge gets it here,
-    /// not from a second program: the pad inverts whatever the PIO drives on that
-    /// pin, and both the side-set and the word agree where they overlap.
+    /// A panel that takes the column on the clock's falling edge gets it here; the
+    /// pad inverts whatever the PIO drives on that pin.
     #[cfg(feature = "invert-clock")]
     fn invert_clock(&mut self);
 }
@@ -653,15 +622,10 @@ where
 
     /// Runs one refresh is made of: the length of the descriptor table.
     ///
-    /// One entry per repetition of every segment, so this is the layout's cost
-    /// and not the panel's — 32 for a six-plane plane-major frame at any
-    /// geometry, `NROWS` times as many for row-major. Nor is it the *buffer's*:
-    /// an entry names its own address, so nothing about this number changes when
-    /// a swap puts the other framebuffer on the panel.
-    ///
-    /// It is also, one for one, the runs a refresh is played in. The interrupts
-    /// a second are [`refresh_hz`], because the table's terminator is the only
-    /// thing that interrupts.
+    /// One entry per repetition of every segment, so this is the layout's cost and
+    /// not the panel's ([`crate::descriptor`] has the shape). The interrupts a
+    /// second are [`refresh_hz`], because the table's terminator is the only thing
+    /// that interrupts.
     ///
     /// [`refresh_hz`]: Self::refresh_hz
     pub fn runs_per_refresh(&self) -> u32 {
