@@ -67,10 +67,9 @@ pub struct Hub75Pins16 {
 impl Hub75Pins16 {
     /// Converts the panel's pins to an owned pin set.
     ///
-    /// The order is the HUB75 bus: top half (`R0 G0 B0`), bottom half
-    /// (`R1 G1 B1`), row address (`A B C D E`), then `STB` and `OE`. The clock
-    /// may be the window pin [`pins::RESERVED`](crate::pins::RESERVED) or any pin
-    /// outside the window.
+    /// The thirteen signals are in bus order ([`crate::pins::LAYOUT`]), with the
+    /// clock last: the window pin [`pins::RESERVED`](crate::pins::RESERVED) or any
+    /// pin outside the window.
     ///
     /// # Panics
     ///

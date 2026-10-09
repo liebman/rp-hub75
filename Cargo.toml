@@ -13,53 +13,34 @@ version = "0.1.0"
 name = "rp_hub75"
 
 [features]
-# No feature is a default. The target is two independent axes, and both are named
-# on the command line: the backend, `rphal` or `embassy`, and the chip, `rp2040`
-# or `rp2350`. Exactly one of each, so `--features rphal,rp2350` is the RP2350
-# driven through rp-hal. The aliases in `.cargo/config.toml` name a pair
-# together with the matching `.cargo/config-*.toml`, and a build missing an axis
-# stops on the `compile_error!` in `src/lib.rs`.
-
-# --- Target selection --------------------------------------------------------
+# The backend family. Exactly one: `rphal` is `rp2040-hal`/`rp235x-hal`, `embassy`
+# is `embassy-rp`. Both select the HAL the driver is written against and the `hal`
+# path the examples import.
 #
-# The backend family. Exactly one. `rphal` is `rp2040-hal`/`rp235x-hal`, which
-# share `rp-hal-common`; `embassy` is `embassy-rp`. They select the HAL the
-# driver is written against — the PIO and DMA register blocks are the same shape
-# on both parts — and the `hal` path the examples import.
-#
-# Cargo features are additive, so a feature cannot pull a dependency only when a
-# second feature is also set, and `rphal` names *both* chips' crates. The axes
-# are kept apart by the *target* instead: each chip's rp-hal crate is declared
-# under that chip's target table below, so the wrong chip's crate is never built.
+# Cargo features are additive, so `rphal` names *both* chips' crates; the axes are
+# kept apart by the *target* instead — each chip's rp-hal crate is declared under
+# that chip's target table below, so the wrong chip's crate is never built.
 rphal = ["dep:rp235x-hal", "dep:rp2040-hal", "dep:rp2040-boot2"]
 embassy = ["dep:embassy-rp", "embassy-rp/critical-section-impl", "embassy-rp/rt", "embassy-rp/time-driver", "embassy-rp/unstable-pac"]
 
-# The chip. Exactly one. `rp2350` is the Interstate 75 W and every board this
-# crate has been flashed on; `rp2040` builds the same driver for the RP2040. The
-# rp-hal crate follows from the chip's target table, so the feature is a marker
-# there; for embassy-rp it sets the crate's chip with the weak `?`, which is a
-# no-op in an rp-hal build, where embassy-rp is not enabled.
+# The chip. Exactly one. For rp-hal the crate follows from the chip's target table,
+# so the feature is a marker; for embassy-rp it sets the crate's chip with the weak
+# `?`, a no-op in an rp-hal build, where embassy-rp is not enabled.
 rp2350 = ["embassy-rp?/rp235xa"]
 rp2040 = ["embassy-rp?/rp2040"]
 
 # --- Library features --------------------------------------------------------
 #
-# These change what the driver compiles and how it drives the panel. The ones
-# that forward to `hub75-framebuffer` change the words the driver streams: the
-# framebuffer's layout, and the blanking it inserts around rows.
+# These change how the driver drives the panel. The ones that forward to
+# `hub75-framebuffer` change the words it streams.
 #
-# Invert the panel's shift clock in the GPIO block, for a panel that takes a
-# column on the clock's falling edge. The clock is the one signal the PIO
-# generates rather than copies out of the framebuffer's words, so its polarity
-# belongs to the pad (`IO_BANK0` `GPIOx` `CTRL` `OUTOVER`) and one program runs
-# either way. Builds for both chips; measured on the RP2350, untested on the
-# RP2040.
+# Invert the clock pin's output in the GPIO block, for a panel that takes a column
+# on the clock's falling edge. Builds for both chips; measured on the RP2350,
+# untested on the RP2040.
 invert-clock = []
 
-# Forward the panel's output-enable polarity to `hub75-framebuffer`, rather
-# than defining a second switch that can disagree with it. The OE pin is
-# driven straight out of the framebuffer's words, so the crate's words are the
-# only place the blanking level lives.
+# Forward the output-enable polarity to `hub75-framebuffer`: the OE pin is driven
+# out of the framebuffer's words, so that crate is the only place the level lives.
 invert-oe = ["hub75-framebuffer/invert-oe"]
 
 skip-black-pixels = ["hub75-framebuffer/skip-black-pixels"]
@@ -88,81 +69,45 @@ reverse-row-order = ["hub75-framebuffer/reverse-row-order"]
 #
 # Read by `examples/` only; they change nothing in the library.
 #
-# The examples' panel clock: 10 MHz with this off, 20 MHz with it, as the
-# esp-hub75 examples do. The driver takes whatever rate it is given and rounds
-# the divider up, so 20 MHz here means "as close to 20 MHz as a divider allows
-# without exceeding it" — 18.75 MHz on the examples' 150 MHz system clock, which
-# is the configuration the examples' rates were measured at.
+# The examples' panel clock: 10 MHz without it, 20 MHz with it. The divider is an
+# integer rounded up, so 20 MHz lands on 18.75 MHz at the examples' 150 MHz.
 20mhz = []
 
 [dependencies]
-# The driver's swap state is shared with the DMA interrupt, so it lives in a
-# `critical_section::Mutex`. `rp235x-hal`'s `critical-section-impl` means
-# `critical_section` is real.
+# Shared with the DMA interrupt, so in a `critical_section::Mutex` (and an
+# `AtomicBool` for the swap flag); `rp235x-hal`'s `critical-section-impl` makes
+# `critical_section` real.
 critical-section = "1.2"
-# `cortex_m::peripheral::NVIC::unmask` is how the driver unmasks its DMA line: both
-# HALs' PACs implement `InterruptNumber` for their `Interrupt`, and `hal::arch`'s
-# own unmask is named differently on the two (rp235x-hal has `interrupt_unmask`,
-# rp2040-hal only global `interrupt_enable`).
+# For `cortex_m::peripheral::NVIC::unmask`, the driver's DMA-line unmask.
 cortex-m = "0.7"
 embedded-graphics = "0.8.2"
-# The driver's swap flags are `AtomicBool`s shared with the DMA interrupt. On a
-# target with native atomics this forwards to `core`; on the RP2040 (thumbv6m),
-# which has no atomic compare-and-swap, the target-specific dependency below
-# enables the `critical-section` feature so the CAS exists. `static_cell` needs
-# the same feature there.
+# Native atomics on the RP2350; the RP2040's target table adds `critical-section`.
 portable-atomic = { version = "1", default-features = false }
-# `interstate75` reorders the plain bitplane words so bit n is pin n for the
-# whole HUB75 bus (GP0-13), which is what lets one `out pins, 14` put a word
-# straight on the pins. See `src/backend/programs.rs`.
+# `interstate75` puts word bit n on pin n, so one `out pins, 14` writes the bus.
 hub75-framebuffer = { version = "0.13.0", features = ["interstate75"] }
 pio = "0.3"
-# The `rp2040`/`rp235x` HALs are not here: they are target-specific, and live in
-# the chip tables at the end of this file so `rphal` can name both without
-# building the wrong chip's crate. They share `rp-hal-common` and `pio 0.3`, so
-# the driver's PIO and DMA code is identical against either; only the crate name
-# and the PAC behind it change.
-#
-# The second backend: the same PIO and DMA driven through embassy-rp's async,
-# channel/state-machine API rather than rp-hal's. The `embassy` feature selects
-# it; the chip feature carries embassy-rp's chip. Its chip is set weakly by
-# `rp2040`/`rp2350`, and its `time-driver` is not enabled: the driver needs no
-# timer, and `clk_sys_freq()` reports the clock without one.
+# The second backend: the same PIO and DMA through embassy-rp, its chip set by
+# `rp2040`/`rp2350` and no `time-driver`.
 embassy-rp = { version = "0.10", optional = true, default-features = false }
-# `fugit` is the `Rate` type the API uses. `rp-hal` re-exports it as
-# `hal::fugit`; `embassy-rp` does not, so the crate names it directly and both
-# backends build against one version.
+# The `Rate` type the API uses; `rp-hal` re-exports it, `embassy-rp` does not.
 fugit = "0.3"
-# The descriptor table is the caller's storage, and `hub75_descriptors!` puts it
-# in a `StaticCell`. A dependency rather than a dev-dependency: the macro names
-# it from downstream crates, through the crate root's re-export.
+# The `StaticCell` `hub75_descriptors!` allocates, so a real dependency.
 static_cell = "2.1"
 
 [dev-dependencies]
-# The examples are bare-metal binaries: `rp2040-hal`'s `#[entry]` expands to code
-# that names the `cortex_m_rt` crate, so the examples link it directly. (On the
-# RP2350 the HAL re-exports what the macro needs.)
+# The examples are bare-metal; `#[entry]` names the `cortex_m_rt` crate.
 cortex-m-rt = "0.7"
-# The examples log over RTT; the library itself does not log and does not depend
-# on defmt, so this is a dev-dependency and an example's log is plain
-# `defmt::info!`. `rp235x-hal` wants `defmt <0.4` and `hub75-framebuffer` wants
-# `1.0`, and two defmt majors cannot share an image, so neither crate's defmt
-# feature is on and only the examples' own primitives reach the log.
+# The examples' log. Neither dependency's defmt feature can be on (`rp235x-hal`
+# wants `<0.4`, `hub75-framebuffer` `1.0`; two majors cannot share an image).
 defmt = "1"
-# `disable-blocking-mode` is not optional here: probe-rs puts RTT into blocking
-# mode, so a host that stops reading would block a log call — and a log call that
-# blocks the display loop is a frozen panel, which this project has already been
-# bitten by twice (the old USB CDC writer). Dropping a frame is the right failure.
+# `disable-blocking-mode` is required: a blocking RTT write would stall the display
+# loop. Dropping a frame is the right failure.
 defmt-rtt = { version = "1.3", features = ["disable-blocking-mode"] }
 embedded-hal = "1.0"
-# The embassy example's executor. A dev-dependency: the library is executor- and
-# backend-agnostic, and `wait_for_done()` works under any executor.
+# The embassy example's executor and clock; the library is executor-agnostic.
 embassy-executor = { version = "0.10", features = ["executor-thread", "platform-cortex-m"] }
-# The embassy example's clock, for the gradient demo's status lines. The
-# `time-driver` feature on embassy-rp starts it in `embassy_rp::init`.
 embassy-time = { version = "0.5", features = ["tick-hz-1_000_000"] }
-# A panic prints its message and location over RTT, then halts. (No default
-# features, so `print-defmt` has to be asked for.)
+# A panic prints its message and location over RTT, then halts.
 panic-probe = { version = "1", features = ["print-defmt"] }
 
 [[example]]
@@ -203,14 +148,14 @@ opt-level = "s"
 
 # --- Target-specific dependencies --------------------------------------------
 #
-# The `rphal` feature names both chips' rp-hal crates, and each is declared only
-# in its own chip's target table, so the wrong chip's crate is never resolved
-# even though its `dep:` name is enabled. The `thumbv8m.main` triple contains a
-# dot, which TOML would read as nested keys, so the table key is quoted.
+# Each chip's rp-hal crate is declared only in its own chip's target table, so the
+# wrong chip's crate is never resolved even though `rphal` enables both `dep:` names.
+# The `thumbv8m.main` triple contains a dot, which TOML would read as nested keys, so
+# the table key is quoted.
 #
-# The host entry keeps the library buildable for the host tests and `cargo doc`:
-# the host is not a chip, and it uses the RP2350 HAL. `not(target_os = "none")`
-# is true only off bare metal, so it does not match a chip build.
+# The host entry keeps the library buildable for the host tests and `cargo doc`: it is
+# the RP2350 HAL, and `not(target_os = "none")` is true only off bare metal, so it does
+# not match a chip build.
 [target.'cfg(not(target_os = "none"))'.dependencies]
 rp235x-hal = { version = "0.4.0", optional = true, features = [
     "binary-info",
@@ -230,13 +175,12 @@ rp2040-hal = { version = "0.12.0", optional = true, features = [
     "critical-section-impl",
     "rt",
 ] }
-# The RP2040 ROM executes a 256-byte second-stage bootloader from the start of
-# flash before the application. `rp2040-boot2` provides its code as
-# `BOOT2_FIRMWARE`, which each example places in `.boot2`.
+# The RP2040 ROM runs a 256-byte second-stage bootloader from flash before the
+# application; each example places this crate's code in `.boot2`.
 rp2040-boot2 = { version = "0.3.0", optional = true }
-# On the RP2040 the atomic compare-and-swap the driver and `static_cell` need is
-# provided through a critical section, because the Cortex-M0+ has none. The
-# RP2350 (Cortex-M33) has real atomics, so this does not apply there.
+# The RP2040 (Cortex-M0+) has no atomic compare-and-swap, so the driver and
+# `static_cell` get one through a critical section. The RP2350 (Cortex-M33) has real
+# atomics.
 portable-atomic = { version = "1", default-features = false, features = [
     "critical-section",
 ] }

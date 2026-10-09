@@ -17,10 +17,9 @@
 //! ```
 //!
 //! The table is the framebuffer's own BCM sequence, materialised by
-//! [`crate::descriptor::fill`], and nothing here knows what a plane or a row is:
-//! plane-major, row-major, threshold and remapped framebuffers all drive the same
-//! code, with the layout only changing the *cost*, which
-//! [`Hub75::runs_per_refresh`] reports. [`crate::descriptor`] has the table's
+//! [`crate::descriptor::fill`]. Plane-major, row-major, threshold and remapped
+//! framebuffers all drive the same code, with the layout only changing the *cost*,
+//! which [`Hub75::runs_per_refresh`] reports. [`crate::descriptor`] has the table's
 //! shape, the terminator that gives one interrupt a frame, and the delta a swap
 //! applies.
 //!

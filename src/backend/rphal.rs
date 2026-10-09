@@ -198,13 +198,10 @@ pub struct Hub75Pins8 {
 impl Hub75Pins16 {
     /// Converts the panel's pins to an owned pin set.
     ///
-    /// The order is the HUB75 bus: top half (`R0 G0 B0`), bottom half
-    /// (`R1 G1 B1`), row address (`A B C D E`), then `STB` and `OE`. The clock is
-    /// the last argument and may be any GPIO the PIO can drive: the window pin
-    /// [`crate::pins::RESERVED`], where the frame buffer's word holds zero, or a pin
-    /// outside the window. The lowest signal pin is the window's base, which
-    /// [`base`](Self::base) reports. See [`crate::pins`] for the offsets this
-    /// order is made of, and [`crate::pins::LAYOUT`] for the word bit each one carries.
+    /// The thirteen signals are in bus order — [`crate::pins::LAYOUT`] — with the
+    /// clock last: the window pin [`crate::pins::RESERVED`], where the word holds
+    /// zero, or a pin outside the window. The lowest signal pin is the window's base,
+    /// which [`base`](Self::base) reports.
     ///
     /// # Panics
     ///
@@ -321,13 +318,10 @@ impl Hub75Pins for Hub75Pins16 {
 impl Hub75Pins8 {
     /// Converts the panel's pins to an owned pin set.
     ///
-    /// The order is the 8-bit latched bus: `R1 G1 B1 R2 G2 B2 LAT OE`. The clock
-    /// is the last argument and must be a GPIO the PIO can drive **outside** the
-    /// eight-pin window: the window has no reserved slot, so a clock inside it
-    /// would be a signal the side-set overwrites on every cycle. The lowest signal
-    /// pin is the window's base, which [`Hub75Pins::base`] reports. See
-    /// [`crate::pins::latched`] for the offsets this order is made of, and
-    /// `LAYOUT` there for the word bit each one carries.
+    /// The eight signals are in bus order — [`crate::pins::latched::LAYOUT`] — with
+    /// the clock last, on a GPIO **outside** the window: the latched window has no
+    /// reserved slot, so a clock inside it is a signal the side-set overwrites. The
+    /// lowest signal pin is the window's base, which [`Hub75Pins::base`] reports.
     ///
     /// # Panics
     ///

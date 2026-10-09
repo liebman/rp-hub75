@@ -1,7 +1,5 @@
 /target
 .DS_Store
 __pycache__/
-/upstream
-/tools
 /plan.md
 /NOTES.md

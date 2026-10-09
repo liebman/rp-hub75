@@ -124,11 +124,6 @@ window, the signal order, and the crystal.
 | `examples/` | `gradient`, `telemetry`, `ghost`, `ladder`, `latched` (rp-hal) and `gradient-embassy` (embassy-rp) — every example goes through `Hub75` |
 | `README.md` | orientation for a human reader |
 
-`tools/` (MicroPython bring-up, capture, and GIF helpers) and `upstream/`
-(vendored `esp-hub75` and interstate75 reference code) are **gitignored**: they
-exist on a developer's machine only. Do not commit them, and do not add files
-there.
-
 `hub75-framebuffer` is the published crate (`0.13.0`, the `interstate75`
 feature). To develop against the sibling checkout instead, uncomment the
 `[patch.crates-io]` block at the end of `Cargo.toml`.
