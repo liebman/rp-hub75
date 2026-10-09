@@ -186,7 +186,7 @@ and no RP2040 board has driven a panel here. Their numbers belong in
 | `src/driver.rs` | `Hub75`, `Hub75Config`, the `Hub75Pins` trait, `Hub75Pins16`, `Hub75Pins8`, `Hub75Swap`, `PioPin`, `on_dma_irq` |
 | `src/descriptor.rs` | the engine: the frame as a descriptor table — one entry a run, then the terminator that ends it — the swap's delta applied in place, `BusWord` (the word width and its DMA `DATA_SIZE`), and the `Hub75Descriptors` storage `hub75_descriptors!` allocates |
 | `src/programs.rs` | the two PIO stream programs (16-bit `out pins, 14`, 8-bit `out pins, 8`), the `Stream` that carries a program with its window, and the word↔pin layout |
-| `src/pins.rs` | the 16-bit HUB75 word layout as data, the `pins::latched` 8-bit layout, the pin window's bounds, and the host tests that hold each layout to `hub75-framebuffer` |
+| `src/pins.rs` | the 16-bit HUB75 word layout as data, the `pins::latched` 8-bit layout, the pin window's bounds, and the compile-time pins and host tests that hold each layout to `hub75-framebuffer` |
 | `.cargo/config-rp2040.toml`, `.cargo/config-rp2350.toml` | per-board target, rustflags and probe runner, named by the aliases in `.cargo/config.toml` |
 | `.cargo/config-rp2040.toml`, `.cargo/config-rp2350.toml` | per-chip target, rustflags and probe runner, plus the `-L` path to the chip's `memory.x`; named by the aliases in `.cargo/config.toml` |
 | `memory/rp2040/memory.x`, `memory/rp2350/memory.x` | the linker memory maps, each named `memory.x` so `link.x`'s `INCLUDE memory.x` finds the chip's |

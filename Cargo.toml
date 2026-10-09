@@ -114,7 +114,7 @@ portable-atomic = { version = "1", default-features = false }
 # `interstate75` reorders the plain bitplane words so bit n is pin n for the
 # whole HUB75 bus (GP0-13), which is what lets one `out pins, 14` put a word
 # straight on the pins. See `src/programs.rs`.
-hub75-framebuffer = { version = "0.12.0", features = ["interstate75"] }
+hub75-framebuffer = { version = "0.13.0", features = ["interstate75"] }
 pio = "0.3"
 # The `rp2040`/`rp235x` HALs are not here: they are target-specific, and live in
 # the chip tables at the end of this file so `rphal` can name both without
@@ -200,9 +200,6 @@ opt-level = "s"
 debug = true
 opt-level = "s"
 
-[patch.crates-io]
-hub75-framebuffer = { path = "../hub75-framebuffer" }
-
 # --- Target-specific dependencies --------------------------------------------
 #
 # The `rphal` feature names both chips' rp-hal crates, and each is declared only
@@ -242,3 +239,6 @@ rp2040-boot2 = { version = "0.3.0", optional = true }
 portable-atomic = { version = "1", default-features = false, features = [
     "critical-section",
 ] }
+
+# [patch.crates-io]
+# hub75-framebuffer = { path = "../hub75-framebuffer" }

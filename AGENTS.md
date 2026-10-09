@@ -43,8 +43,9 @@ runtime pin number cannot be checked by the type system). `src/driver.rs` progra
 `out_pins(pins.base(), …)` and `side_set_pin_base(pins.clock())`. The *word layout*
 is still the `interstate75` feature of `hub75-framebuffer`, which is per-board;
 base, wiring and layout are independent axes, and `LAYOUT` is the crate's copy of
-the layout's numbers, kept honest by the host test in `src/pins.rs` that draws
-pixels into a real framebuffer and checks which bits move.
+the layout's numbers, pinned to `hub75-framebuffer::pinmap::PINMAP` at compile time
+by a `const _` check in `src/pins.rs` and kept honest by the host test there that
+draws pixels into a real framebuffer and checks which bits move.
 
 The clock is the one pin that is not a word bit: a side-set drives it, so it has a
 pin base of its own and may be the window's reserved pin (`pins::RESERVED`, where
@@ -64,9 +65,9 @@ returns the `programs::Stream` (a program with the window width it writes), so
 `out pins, 14` and `out pins, 8` cannot fall out of step with their word.
 
 The 8-bit window has **no reserved bit**, so its clock is always outside the window;
-`Hub75Pins8::new` refuses a clock inside it, and `pins::latched` is the layout,
-held to `hub75-framebuffer` by its own host test. `examples/latched.rs` is the
-wiring.
+`Hub75Pins8::new` refuses a clock inside it, and `pins::latched` is the layout, pinned
+to `hub75-framebuffer::pinmap::LATCHED_PINMAP` at compile time and held to it by its
+own host test. `examples/latched.rs` is the wiring.
 
 ### The target
 
@@ -118,7 +119,7 @@ window, the signal order, and the crystal.
 | `src/backend/programs.rs` | the two PIO stream programs (`hub75_stream16`, `hub75_stream8`) and `Stream`, shared by both backends (they use the same `pio` crate) |
 | `src/backend/window.rs` | the bus-window checks (`check_bus`, `check_bus8`), shared by both backends |
 | `src/descriptor.rs` | the engine: the frame as a descriptor table a control channel plays into the data channel's `AL3` block, plus `BusWord` (the framebuffer word's width and DMA `DATA_SIZE`) |
-| `src/pins.rs` | the 16-bit HUB75 word layout as data (`pins`) and the 8-bit one (`pins::latched`), the window's bounds, and the host tests that pin each layout to `hub75-framebuffer` |
+| `src/pins.rs` | the 16-bit HUB75 word layout as data (`pins`) and the 8-bit one (`pins::latched`), the window's bounds, and the compile-time pins and host tests that hold each layout to `hub75-framebuffer` |
 | `.cargo/config-rp2040.toml`, `.cargo/config-rp2350.toml` | the per-chip target, runner, and the `-L` path to the chip's `memory.x`; the chip config is shared by both backends |
 | `memory/rp2040/memory.x`, `memory/rp2350/memory.x` | the linker memory maps, each named `memory.x` so `link.x`'s `INCLUDE memory.x` finds the chip's |
 | `examples/` | `gradient`, `telemetry`, `ghost`, `ladder`, `latched` (rp-hal) and `gradient-embassy` (embassy-rp) — every example goes through `Hub75` |
@@ -157,8 +158,9 @@ wrong about by itself — the clock divider, the descriptor table `fill` and `pa
 write, and the pin checks `Hub75Pins16::new` and `Hub75Pins8::new` make. The last
 of those includes `src/pins.rs`'s layout tests, which draw pixels into a real
 `hub75-framebuffer` framebuffer of each word width and assert which word bits move:
-that is what keeps `LAYOUT` and `pins::latched::LAYOUT` from
-drifting away from the dependency they describe. There are no tests for the stream
+`LAYOUT` and `pins::latched::LAYOUT` are pinned to the dependency's exported `pinmap`
+at compile time, so a layout change fails the build, and those tests then confirm
+what the words actually drive. There are no tests for the stream
 program or for the drawing convention the examples use: the programs are two PIO
 instructions, and the emulator that used to step it supplied its own state-machine
 configuration, so it could not have caught a driver that configured the machine

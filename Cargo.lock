@@ -839,10 +839,11 @@ dependencies = [
 
 [[package]]
 name = "hub75-framebuffer"
-version = "0.12.0"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "306bb08db3dcead0ddaa102f1d09a3f4224c7dba20bb04884101f28251d4e38d"
 dependencies = [
  "bitfield 0.19.5",
- "embedded-dma",
  "embedded-graphics",
 ]
 

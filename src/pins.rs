@@ -20,8 +20,11 @@
 //! takes the pins, and that constructor checks the wiring against it. The colours
 //! and the address are the *framebuffer's* — this crate never reads a pixel — so
 //! the values here are the contract between the two crates rather than an input
-//! to the stream program. [`RESERVED`] is the one bit the framebuffer always
-//! leaves at zero, which is what decides where the clock may be wired.
+//! to the stream program. Every constant below is pinned to that contract at
+//! compile time, against the `pinmap` module `hub75-framebuffer` exports, so a
+//! change to the dependency's layout stops the build. [`RESERVED`] is the one bit
+//! the framebuffer always leaves at zero, which is what decides where the clock
+//! may be wired.
 //!
 //! ## The pin window
 //!
@@ -103,6 +106,10 @@ pub const ROW_E: u8 = 10;
 /// pin while the clock is not: `out pins, 14` writes the word's zero to it on
 /// every cycle. A clock wired elsewhere therefore leaves this pin unconnected
 /// and undriven, which [`crate::Hub75Pins16::new`] accepts.
+///
+/// A compile-time check in this module requires this bit to be one the
+/// `interstate75` layout lists as unused, so it can never be moved onto a
+/// signal the side-set would then fight on every cycle.
 pub const RESERVED: u8 = 11;
 /// Strobe / latch, active high. Word bit 12.
 ///
@@ -129,6 +136,49 @@ pub const LAYOUT: [u8; 13] = [
 
 /// Signals a framebuffer word carries: the length of [`LAYOUT`].
 pub const SIGNAL_COUNT: usize = LAYOUT.len();
+
+// ---------------------------------------------------------------------------
+// The framebuffer is the authority: pin the layout above to it
+// ---------------------------------------------------------------------------
+
+// `hub75-framebuffer`'s `interstate75` layout decides where a signal's word bit
+// lives; the constants above are this crate's reading of it, in bus order. A
+// disagreement would drive the wrong pins — swapped colours, a latch on the
+// wrong bit — with no error anywhere, so each constant is pinned to the
+// dependency's exported `pinmap` here. A layout change in `hub75-framebuffer`
+// now stops the build rather than waiting to be caught by the host tests.
+const _: () = {
+    use crate::framebuffer::pinmap::PINMAP;
+
+    assert!(R0 as usize == PINMAP.red0);
+    assert!(G0 as usize == PINMAP.grn0);
+    assert!(B0 as usize == PINMAP.blu0);
+    assert!(R1 as usize == PINMAP.red1);
+    assert!(G1 as usize == PINMAP.grn1);
+    assert!(B1 as usize == PINMAP.blu1);
+
+    // The row address is one contiguous field, A..=E, least significant first.
+    assert!(ROW_A as usize == PINMAP.addr_lsb);
+    assert!(PINMAP.addr_bits == 5);
+    assert!(ROW_E as usize == PINMAP.addr_msb());
+
+    assert!(STB as usize == PINMAP.latch);
+    assert!(OE as usize == PINMAP.oe);
+
+    // A word drives every bit up to and including `OE`, so its width is `oe + 1`.
+    assert!(WORD_PINS as usize == PINMAP.oe + 1);
+
+    // `RESERVED` is the window pin the clock is wired to there, so it must be a
+    // bit `hub75-framebuffer` leaves unused — one of the layout's `spare` bits:
+    // the word holds that bit at zero and the PIO's side-set drives the same
+    // level, so the two writes agree. A `RESERVED` that named a signal would put
+    // the side-set in conflict with the word on every cycle.
+    assert!(
+        PINMAP.spare[0] == RESERVED as usize
+            || PINMAP.spare[1] == RESERVED as usize
+            || PINMAP.spare[2] == RESERVED as usize
+    );
+};
 
 /// Highest GPIO number the PIO can address at all.
 ///
@@ -165,7 +215,9 @@ pub const MAX_WORD_BASE: u8 = MAX_PIN - (WORD_PINS - 1);
 /// `LAYOUT` states the signal order as data, in the order
 /// [`crate::Hub75Pins8::new`] takes the pins, and that constructor checks the
 /// wiring against it. The offsets are offsets from the window's first pin, and
-/// each is also the word bit that carries the signal. The names come from
+/// each is also the word bit that carries the signal. Every constant is pinned to
+/// `hub75-framebuffer`'s exported `pinmap::LATCHED_PINMAP` at compile time, so a
+/// change to the dependency stops the build. The names come from
 /// `hub75-framebuffer`'s `bitplane::latched`, where `R1`/`R2` are the two
 /// sub-pixels' red bits.
 pub mod latched {
@@ -202,6 +254,35 @@ pub mod latched {
 
     /// Signals a latched framebuffer word carries: the length of `LAYOUT`.
     pub const SIGNAL_COUNT: usize = LAYOUT.len();
+
+    // -----------------------------------------------------------------------
+    // The framebuffer is the authority: pin the layout above to it
+    // -----------------------------------------------------------------------
+
+    // `hub75-framebuffer`'s `bitplane::latched` layout decides where a signal's
+    // word bit lives. This module names the top half's colour `R1/G1/B1` and the
+    // bottom half's `R2/G2/B2`, which is the reverse of `LATCHED_PINMAP`'s
+    // `color0_*` (upper half) and `color1_*` (lower half); pinning the two
+    // together here keeps that cross-over from being read the wrong way.
+    const _: () = {
+        use crate::framebuffer::pinmap::LATCHED_PINMAP;
+
+        assert!(R1 as usize == LATCHED_PINMAP.red0);
+        assert!(G1 as usize == LATCHED_PINMAP.grn0);
+        assert!(B1 as usize == LATCHED_PINMAP.blu0);
+        assert!(R2 as usize == LATCHED_PINMAP.red1);
+        assert!(G2 as usize == LATCHED_PINMAP.grn1);
+        assert!(B2 as usize == LATCHED_PINMAP.blu1);
+
+        assert!(LATCH as usize == LATCHED_PINMAP.latch);
+        assert!(OE as usize == LATCHED_PINMAP.oe);
+
+        // A word drives every bit up to and including `OE`, and the 8-bit layout
+        // has no reserved slot: the clock is always wired outside the window, so
+        // there is no spare bit for it to hide in. `check_bus8` refuses a clock
+        // inside the window.
+        assert!(WORD_PINS as usize == LATCHED_PINMAP.oe + 1);
+    };
 
     /// Highest GPIO number the eight-pin window can start at: 24.
     ///
