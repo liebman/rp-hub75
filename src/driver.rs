@@ -423,9 +423,8 @@ pub fn on_dma_irq() {
 
         // Nothing here may log. defmt's `acquire` is a critical section, and this
         // runs once a frame with the picture waiting on it: a logger that blocks,
-        // or a deadlock against a log in thread context, would be the frozen
-        // panel this project has already met once. The library does not log at
-        // all; the examples log from their own loops.
+        // or a deadlock against a log in thread context, would freeze the panel.
+        // The library does not log at all; the examples log from their own loops.
         engine.step_frame()
     });
 
@@ -489,13 +488,13 @@ where
     /// [`Hub75Error::AlreadyInitialised`] if a driver already exists, and
     /// [`Hub75Error::NotADmaIrq`] if `config.interrupt` is not a DMA line.
     pub(crate) fn reserve(config: Hub75Config) -> Result<u8, Hub75Error> {
+        // Resolve the line before claiming the driver, so a configuration the
+        // caller can correct does not consume the one driver for good.
+        let line = line_index(config.interrupt).ok_or(Hub75Error::NotADmaIrq)?;
         if DRIVER_TAKEN.swap(true, Ordering::AcqRel) {
             return Err(Hub75Error::AlreadyInitialised);
         }
-        match line_index(config.interrupt) {
-            Some(line) => Ok(line),
-            None => Err(Hub75Error::NotADmaIrq),
-        }
+        Ok(line)
     }
 
     /// The shared tail of the backend constructors: bind the channels to the data
@@ -744,16 +743,15 @@ pub struct Hub75Swap<FB: 'static> {
 }
 
 // SAFETY: both pointers come from `&'static mut FB` references, and at most one
-// `Hub75Swap` exists at a time — `swap()` refuses to arm a second.
-unsafe impl<FB: 'static> Send for Hub75Swap<FB> {}
+// `Hub75Swap` exists at a time — `swap()` refuses to arm a second. The handle
+// moves the framebuffer across threads, so it is `Send` only for a `Send` one.
+unsafe impl<FB: Send + 'static> Send for Hub75Swap<FB> {}
 
 impl<FB: 'static> Hub75Swap<FB> {
     /// Whether the outgoing framebuffer can be reclaimed yet.
     ///
     /// A plain read of the flag the interrupt sets at the frame boundary; it does
-    /// not drive anything. (It reads like `esp-hub75`'s, and for the same
-    /// reason: there the DMA needs the CPU only at boundaries, here only at
-    /// runs.)
+    /// not drive anything.
     pub fn is_done(&self) -> bool {
         SWAP_DONE.load(Ordering::Acquire)
     }
@@ -843,5 +841,29 @@ mod tests {
         assert!(divider_for(150_000_000, 0) > u16::MAX as u32);
         assert!(divider_for(150_000_000, u32::MAX) <= u16::MAX as u32);
         assert_eq!(divider_for(150_000_000, u32::MAX), 1);
+    }
+
+    /// A corrected configuration can still start after a bad one: a failed
+    /// reservation does not consume the one driver.
+    #[test]
+    fn a_bad_interrupt_does_not_consume_the_driver() {
+        use super::Hub75Config;
+        use super::Hub75Error;
+        use crate::Hub75;
+        use crate::Hub75Pins16;
+        use crate::hal::pac::Interrupt;
+        use hub75_framebuffer::bitplane::plain::frame;
+        use hub75_framebuffer::compute_rows;
+
+        type Fb = frame::DmaFrameBuffer<{ compute_rows(64) }, 64, 6>;
+
+        assert_eq!(
+            Hub75::<Fb, Hub75Pins16>::reserve(Hub75Config::new(Interrupt::TIMER0_IRQ_0)),
+            Err(Hub75Error::NotADmaIrq)
+        );
+        assert_eq!(
+            Hub75::<Fb, Hub75Pins16>::reserve(Hub75Config::new(Interrupt::DMA_IRQ_1)),
+            Ok(1)
+        );
     }
 }

@@ -30,7 +30,7 @@ loop {
 * A framebuffer word *is* the bus: with `hub75-framebuffer`'s `interstate75`
   layout, bit *n* is pin *n*, so one PIO `out pins, 14` drives the six colour
   bits, the row address, the latch and the output enable. No conversion pass —
-  see [`programs`](src/programs.rs). The clock is the exception: the PIO
+  see [`programs`](src/backend/programs.rs). The clock is the exception: the PIO
   generates it with a side-set, so it is the one pin specified apart from the
   window (`Hub75Pins16::new`'s last argument) and the one word bit
   (`pins::RESERVED`) that carries no signal. The **8-bit latched** bus is the same
@@ -100,7 +100,7 @@ Each chip's `rp-hal` crate is declared under that chip's target triple, so
 
 | feature | effect |
 |---|---|
-| `invert-clock` | inverts the clock pin's output in the GPIO block (`IO_BANK0` `GPIOx` `CTRL` `OUTOVER`) for a panel that takes a column on the clock's falling edge. The clock is the one signal the PIO generates rather than copies out of a word, so its polarity is the pin's and one program runs either way. RP2350-only, like the driver. |
+| `invert-clock` | inverts the clock pin's output in the GPIO block (`IO_BANK0` `GPIOx` `CTRL` `OUTOVER`) for a panel that takes a column on the clock's falling edge. The clock is the one signal the PIO generates rather than copies out of a word, so its polarity is the pin's and one program runs either way. Builds for both chips; measured on the RP2350, untested on the RP2040. |
 | `invert-oe` | forwards to `hub75-framebuffer/invert-oe` for a panel whose output enable is active-high. The crate's words are the only place that polarity lives, so there is one switch. |
 
 The rest forward to `hub75-framebuffer` and change the words the driver streams —
@@ -114,7 +114,7 @@ list.
 
 | feature | effect |
 |---|---|
-| `20mhz` | the examples' panel clock: 10 MHz without it, 20 MHz with it, as the esp-hub75 examples do. The divider is an integer rounded *up*, so 20 MHz here lands on 18.75 MHz — the clock every rate in [`NOTES.md`](NOTES.md) was measured at |
+| `20mhz` | the examples' panel clock: 10 MHz without it, 20 MHz with it, as the esp-hub75 examples do. The divider is an integer rounded *up*, so 20 MHz here lands on 18.75 MHz — the clock the examples' rates were measured at |
 
 ## Examples
 
@@ -128,12 +128,8 @@ list.
 | `gradient-embassy` | `gradient` on the embassy-rp backend: `#[embassy_executor::main]`, a `bind_interrupts!` handler calling `on_dma_irq`, and `wait_for_done().await`. Built and run with `cargo build-embassy` / `cargo run-embassy --example gradient-embassy` (the `embassy,rp2350` features) |
 | `latched` | the **8-bit latched** bus: the `gradient` display on `bitplane::latched` and `Hub75Pins8`, drawn through an external latch circuit on a non-zero window base (GP2–GP9, clock GP10). Needs the breadboard latch, not just the panel header |
 
-Three earlier engines lived in examples too — M3's raw single-channel stream, M4a's
-six-channel ring, and the one-channel/descriptor pair that replaced them — and so
-did M3's original ladder; the losers are gone from the tree, what they taught is in
-[NOTES.md](NOTES.md) and in git, and the ladder is back as `examples/ladder.rs`.
 Every example here drives the panel through [`Hub75`](src/driver.rs), which is the
-only API this crate offers.
+only API this crate offers. What the earlier engines taught is in the git history.
 
 Flashing and running, with the CMSIS-DAP probe attached:
 
@@ -165,29 +161,27 @@ looking right — straight colour ramps and no row or column bleed. The per-run
 engine it replaced measured 985/s on the same panel: 13.5 interrupts a refresh,
 where its own banner said 17, because the ring it used depended on where the linker
 put the framebuffers. Neither that engine nor the ring is in the crate any more.
-See [plan.md](plan.md) for what is done and what is next, and [NOTES.md](NOTES.md)
-for the measurements and the datasheet facts the design rests on. The ladder has now
-been read off the panel — all five rungs as they should be, which closes M3's
-read-back and settles the latch edge (this panel takes the row on `STB`'s falling
-edge) and the R0/G0/B0 colour order. What is still unverified is the panel clock
-ceiling: the ladder at a faster divider, and an analyser for the number.
+The ladder has now been read off the panel — all five rungs as they should be,
+which closes the ladder's read-back and settles the latch edge (this panel takes
+the row on `STB`'s falling edge) and the R0/G0/B0 colour order. What is still
+unverified is the panel clock ceiling: the ladder at a faster divider, and an
+analyser for the number.
 
 The **8-bit latched** path and the **RP2040** build are new and compiled — the
 `latched` example links for both `thumbv6m-none-eabi` and
 `thumbv8m.main-none-eabihf`, and the host tests cover the 8-bit word layout — but
 they are **not yet flashed**: they need the external latch circuit on a breadboard,
-and no RP2040 board has driven a panel here. Their numbers belong in
-[NOTES.md](NOTES.md) once they are.
+and no RP2040 board has driven a panel here; their numbers are unrecorded until
+they are.
 
 ## Layout
 
 | path | what |
 |---|---|
-| `src/driver.rs` | `Hub75`, `Hub75Config`, the `Hub75Pins` trait, `Hub75Pins16`, `Hub75Pins8`, `Hub75Swap`, `PioPin`, `on_dma_irq` |
+| `src/driver.rs` | `Hub75`, `Hub75Config`, `Hub75Error`, the `Hub75Pins` trait, `Hub75Swap`, `on_dma_irq`, and the divider math |
 | `src/descriptor.rs` | the engine: the frame as a descriptor table — one entry a run, then the terminator that ends it — the swap's delta applied in place, `BusWord` (the word width and its DMA `DATA_SIZE`), and the `Hub75Descriptors` storage `hub75_descriptors!` allocates |
-| `src/programs.rs` | the two PIO stream programs (16-bit `out pins, 14`, 8-bit `out pins, 8`), the `Stream` that carries a program with its window, and the word↔pin layout |
+| `src/backend/` | the HAL port: `mod.rs` chooses the backend and re-exports the selected HAL and pin sets; `rphal.rs` / `embassy.rs` hold the two `Hub75Pins16` / `Hub75Pins8` sets, `PioPin`, `bring_up` and the DMA accessors; `programs.rs` the two PIO stream programs (16-bit `out pins, 14`, 8-bit `out pins, 8`) and the `Stream`; `window.rs` the bus-window checks |
 | `src/pins.rs` | the 16-bit HUB75 word layout as data, the `pins::latched` 8-bit layout, the pin window's bounds, and the compile-time pins and host tests that hold each layout to `hub75-framebuffer` |
-| `.cargo/config-rp2040.toml`, `.cargo/config-rp2350.toml` | per-board target, rustflags and probe runner, named by the aliases in `.cargo/config.toml` |
 | `.cargo/config-rp2040.toml`, `.cargo/config-rp2350.toml` | per-chip target, rustflags and probe runner, plus the `-L` path to the chip's `memory.x`; named by the aliases in `.cargo/config.toml` |
 | `memory/rp2040/memory.x`, `memory/rp2350/memory.x` | the linker memory maps, each named `memory.x` so `link.x`'s `INCLUDE memory.x` finds the chip's |
 | `tools/` | MicroPython bring-up scripts, capture and GIF helpers |

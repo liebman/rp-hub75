@@ -4,14 +4,7 @@
 //! channel's `AL3` register block, whose last word (`AL3_READ_ADDR_TRIG`)
 //! triggers the run it describes. The data channel chains back to the control
 //! channel when the run completes, so the two hand the picture to each other
-//! without the CPU:
-//!
-//! ```text
-//! control channel  writes (trans_count, read_addr) into the data channel's AL3
-//!                  the read address starts the run
-//! data channel     streams the run to the PIO FIFO, paced by its DREQ
-//!                  completes, chains to the control channel
-//! ```
+//! without the CPU (the diagram is in [`crate::driver`]).
 //!
 //! `AL3` is the register block whose trigger word is the last of the two words a
 //! run needs, so a descriptor is exactly two words ([`Descriptor`]) and the data

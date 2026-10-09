@@ -3,7 +3,7 @@ authors = ["liebman <liebman@zod.com>"]
 categories = ["embedded", "hardware-support", "no-std"]
 description = "A HUB75 LED matrix driver for RP2040 and RP2350 (Pimoroni Interstate 75 W)"
 edition = "2024"
-keywords = ["hub75", "rp2040", "rp2350", "led-matrix", "embedded", "driver"]
+keywords = ["hub75", "rp2040", "rp2350", "led-matrix", "embedded"]
 license = "MIT OR Apache-2.0"
 name = "rp-hub75"
 rust-version = "1.85"
@@ -52,7 +52,8 @@ rp2040 = ["embassy-rp?/rp2040"]
 # column on the clock's falling edge. The clock is the one signal the PIO
 # generates rather than copies out of the framebuffer's words, so its polarity
 # belongs to the pad (`IO_BANK0` `GPIOx` `CTRL` `OUTOVER`) and one program runs
-# either way. RP2350-only, like the driver.
+# either way. Builds for both chips; measured on the RP2350, untested on the
+# RP2040.
 invert-clock = []
 
 # Forward the panel's output-enable polarity to `hub75-framebuffer`, rather
@@ -91,7 +92,7 @@ reverse-row-order = ["hub75-framebuffer/reverse-row-order"]
 # esp-hub75 examples do. The driver takes whatever rate it is given and rounds
 # the divider up, so 20 MHz here means "as close to 20 MHz as a divider allows
 # without exceeding it" — 18.75 MHz on the examples' 150 MHz system clock, which
-# is the configuration every rate in NOTES.md was measured at.
+# is the configuration the examples' rates were measured at.
 20mhz = []
 
 [dependencies]
@@ -113,7 +114,7 @@ embedded-graphics = "0.8.2"
 portable-atomic = { version = "1", default-features = false }
 # `interstate75` reorders the plain bitplane words so bit n is pin n for the
 # whole HUB75 bus (GP0-13), which is what lets one `out pins, 14` put a word
-# straight on the pins. See `src/programs.rs`.
+# straight on the pins. See `src/backend/programs.rs`.
 hub75-framebuffer = { version = "0.13.0", features = ["interstate75"] }
 pio = "0.3"
 # The `rp2040`/`rp235x` HALs are not here: they are target-specific, and live in
@@ -240,5 +241,7 @@ portable-atomic = { version = "1", default-features = false, features = [
     "critical-section",
 ] }
 
+# Optional: develop against the sibling `hub75-framebuffer` checkout instead of
+# the published crate. Uncomment both lines to override.
 # [patch.crates-io]
 # hub75-framebuffer = { path = "../hub75-framebuffer" }

@@ -1,7 +1,7 @@
 //! The read-back ladder: five patterns, each one naming a fault.
 //!
-//! These are the M3 rungs, re-expressed through [`Hub75`] and kept as a
-//! *regression* tool rather than a bring-up one. `gradient` and `ghost` are the
+//! The rungs, re-expressed through [`Hub75`] and kept as a *regression* tool
+//! rather than a bring-up one. `gradient` and `ghost` are the
 //! eye's version of the same questions; this is the version whose failure modes
 //! are specific.
 //!
@@ -116,7 +116,7 @@ const RUNGS: [&str; 5] = [
     "E: the diagonal, white above the join and blue below",
 ];
 
-/// How long one rung is held, as in the M3 ladder.
+/// How long one rung is held.
 const RUNG_MS: u64 = 2_000;
 
 /// Crystal frequency on the Interstate 75 W, in Hz.

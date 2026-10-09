@@ -1,4 +1,4 @@
-//! M6: the 8-bit **latched** bus, on the driver.
+//! The 8-bit **latched** bus, on the driver.
 //!
 //! The same display as `gradient`, but on an 8-bit latched framebuffer
 //! (`hub75-framebuffer`'s `bitplane::latched`) instead of the 16-bit direct-drive

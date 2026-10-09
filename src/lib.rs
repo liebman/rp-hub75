@@ -131,9 +131,6 @@
 //! cost, which [`Hub75::runs_per_refresh`] reports. Six planes at an 18.75 MHz
 //! panel clock is 63 panel scans a refresh — 6.9 ms, ≈145 Hz — for 32 runs
 //! plane-major, or 1024 row-major.
-//!
-//! See `NOTES.md` for the measurements and the register facts this rests on,
-//! and `plan.md` for what is done and what is next.
 
 #![no_std]
 

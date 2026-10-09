@@ -1,4 +1,4 @@
-//! M5: double buffering, the engine interrupt, and telemetry over RTT.
+//! Double buffering, the engine interrupt, and telemetry over RTT.
 //!
 //! The same driver as `gradient`, with the two things a real application wants
 //! on top:
@@ -334,7 +334,7 @@ pub static PICOTOOL_ENTRIES: [hal::binary_info::EntryAddr; 4] = [
     hal::binary_info::rp_cargo_bin_name!(),
     hal::binary_info::rp_cargo_version!(),
     hal::binary_info::rp_program_description!(
-        c"rp-hub75 M5: double buffering, wake IRQ, telemetry over RTT"
+        c"rp-hub75: double buffering, wake IRQ, telemetry over RTT"
     ),
     hal::binary_info::rp_program_build_attribute!(),
 ];

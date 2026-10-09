@@ -65,8 +65,7 @@
 //! ([`Stream::threshold`]), the bits one `out pins, N` shifts out, so the OSR
 //! refills exactly on a column boundary and the word's fields cannot drift.
 //! Sixteen would leave a 14-bit word's two spare top bits in the OSR and put
-//! every following word two bits out of place, which is the M2b confetti in a new
-//! costume.
+//! every following word two bits out of place.
 //!
 //! # The one hair: the reserved bit
 //!

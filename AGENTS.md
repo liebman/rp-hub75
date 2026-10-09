@@ -1,14 +1,13 @@
 # AGENTS.md
 
 Working agreement for coding agents in `rp-hub75`. Human-facing orientation is in
-[`README.md`](./README.md); the reasoning and the measurements are in
-[`NOTES.md`](./NOTES.md) and [`plan.md`](./plan.md).
+[`README.md`](./README.md).
 
 ## Project
 
 A `no_std` HUB75 LED matrix driver for the **RP2040** and **RP2350**. The **Pimoroni Interstate
-75 W** (64×64, 1/32 scan) is the *reference board* — where the pin map comes from
-and where every measurement in `NOTES.md` was taken — not the only target. One
+75 W** (64×64, 1/32 scan) is the *reference board* — where the pin map and the
+measurements come from — not the only target. One
 PIO state machine streams a `hub75-framebuffer` bitplane framebuffer straight at
 the panel, fed by two DMA channels that hand the picture to each other: one plays
 a descriptor table into the other's registers, and the CPU does nothing between
@@ -123,8 +122,6 @@ window, the signal order, and the crystal.
 | `.cargo/config-rp2040.toml`, `.cargo/config-rp2350.toml` | the per-chip target, runner, and the `-L` path to the chip's `memory.x`; the chip config is shared by both backends |
 | `memory/rp2040/memory.x`, `memory/rp2350/memory.x` | the linker memory maps, each named `memory.x` so `link.x`'s `INCLUDE memory.x` finds the chip's |
 | `examples/` | `gradient`, `telemetry`, `ghost`, `ladder`, `latched` (rp-hal) and `gradient-embassy` (embassy-rp) — every example goes through `Hub75` |
-| `NOTES.md` | measurements, datasheet facts, and the reasoning: the design record |
-| `plan.md` | milestones: what is done, in progress, and next |
 | `README.md` | orientation for a human reader |
 
 `tools/` (MicroPython bring-up, capture, and GIF helpers) and `upstream/`
@@ -132,8 +129,9 @@ window, the signal order, and the crystal.
 exist on a developer's machine only. Do not commit them, and do not add files
 there.
 
-`hub75-framebuffer` is a `[patch.crates-io]` **path** dependency on the sibling
-checkout `../hub75-framebuffer`. A build fails without it.
+`hub75-framebuffer` is the published crate (`0.13.0`, the `interstate75`
+feature). To develop against the sibling checkout instead, uncomment the
+`[patch.crates-io]` block at the end of `Cargo.toml`.
 
 ## Build, test, verify
 
@@ -201,13 +199,11 @@ with that.
   (`#[unsafe(no_mangle)]`, `unsafe impl Send for Engine {}`). Read the existing
   `unsafe` blocks before adding one; `src/driver.rs` justifies each.
 * Comments and docs state what the code does, and why when the reason is a fact —
-  a register, a measurement, a hazard, a timing limit. Rejected alternatives
-  belong in `NOTES.md`: do not explain a choice by arguing about the one it
-  displaced (`read from the plan rather than counted …`), state the value and
-  where it comes from.
-* Keep `README.md`, `NOTES.md`, and `plan.md` in step with the code. A milestone
-  that changes state, or a measurement that settles a question, belongs in
-  `plan.md` or `NOTES.md` in the same change.
+  a register, a measurement, a hazard, a timing limit. Do not explain a choice by
+  arguing about the one it displaced (`read from the plan rather than counted …`):
+  state the value and where it comes from.
+* Keep `README.md` in step with the code. A change that alters the crate's state,
+  or settles a question of fact, carries the fact in the same change.
 * Commit subjects are short, lowercase, and describe the change
   (`add interrupts/sec to gradient`). Do not rewrite published history.
 

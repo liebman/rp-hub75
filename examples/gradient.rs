@@ -1,4 +1,4 @@
-//! M5: the `esp-hub75` gradient demo, on the driver.
+//! The `esp-hub75` gradient demo, on the driver.
 //!
 //! The same display as `../esp-hub75/examples/gradient`: three horizontal colour
 //! ramps across the top of the panel — red, then green, then blue, one step per
