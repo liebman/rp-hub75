@@ -44,8 +44,6 @@ reverse-row-order = ["rp-hub75/reverse-row-order"]
 [dependencies]
 rp-hub75 = { path = "../..", features = ["embassy"] }
 embedded-graphics = "0.8.2"
-# The `Rate` type the driver's API uses; `embassy-rp` does not re-export it.
-fugit = "0.3"
 # The framebuffers' `'static` storage. The framebuffer crate itself is not named:
 # its layout and types arrive through `rp_hub75::framebuffer`.
 static_cell = "2.1"

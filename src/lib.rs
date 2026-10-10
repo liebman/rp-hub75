@@ -47,7 +47,7 @@
 //! Two framebuffers, one descriptor table, one driver, a swap per frame:
 //!
 //! ```text
-//! let hub75 = Hub75::new(pio, ch_ctrl, ch_data, &mut resets, pins, sys_clock,
+//! let hub75 = Hub75::new(pio, ch_ctrl, ch_data, &mut resets, pins, sys_clock_hz,
 //!                        Hub75Config::new(pac::Interrupt::DMA_IRQ_1), fb0,
 //!                        hub75_descriptors!(Fb))?;
 //! let mut fb = fb1;                       // fb0 is on the panel now

@@ -11,7 +11,6 @@
 //! difference, implemented once per backend.
 
 use crate::driver::Hub75Pins;
-use fugit::Rate;
 
 #[cfg(feature = "rphal")]
 mod rphal;
@@ -137,8 +136,9 @@ pub(crate) struct BringUp<P: Hub75Pins> {
     pub pins: P,
     /// The PIO clock divider in use.
     pub divider: u16,
-    /// The panel clock actually achieved: the request rounded to a divider.
-    pub panel_clock: Rate<u32, 1, 1>,
+    /// The panel clock actually achieved in hertz: the request rounded to a
+    /// divider.
+    pub panel_clock_hz: u32,
     /// The state machine's FIFO, which is the data channel's write address.
     pub fifo: u32,
     /// The state machine's TX DREQ, which paces the data channel.

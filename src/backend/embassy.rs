@@ -21,7 +21,6 @@ use embassy_rp::pio::Pin;
 use embassy_rp::pio::Pio;
 use embassy_rp::pio::ShiftConfig;
 use embassy_rp::pio::ShiftDirection;
-use fugit::Rate;
 use hub75_framebuffer::FrameBuffer;
 
 use super::BringUp;
@@ -363,20 +362,18 @@ pub(crate) fn clear_intr(line: u8, flag: u32) {
 pub(crate) fn bring_up<P: EmbassyPins>(
     mut pio: Pio<'static, PIO0>,
     pins: P,
-    system_clock: Rate<u32, 1, 1>,
+    system_clock_hz: u32,
     config: Hub75Config,
 ) -> BringUp<P> {
-    let divider = divider_for(system_clock.to_Hz(), config.panel_clock.to_Hz());
+    let divider = divider_for(system_clock_hz, config.panel_clock_hz);
     assert!(
         divider >= 1 && divider <= u16::MAX as u32,
         "the panel clock is not representable: divider {divider} is outside \
-         the PIO's 1..=65535 range (system clock {} Hz, panel clock {} Hz)",
-        system_clock.to_Hz(),
-        config.panel_clock.to_Hz()
+         the PIO's 1..=65535 range (system clock {system_clock_hz} Hz, panel clock {} Hz)",
+        config.panel_clock_hz
     );
     let divider = divider as u16;
-    let achieved =
-        Rate::<u32, 1, 1>::from_raw(achieved_clock(system_clock.to_Hz(), divider as u32));
+    let panel_clock_hz = achieved_clock(system_clock_hz, divider as u32);
 
     let stream = stream_for::<P::Word>();
     let loaded = pio.common.load_program(stream.program());
@@ -425,7 +422,7 @@ pub(crate) fn bring_up<P: EmbassyPins>(
     BringUp {
         pins,
         divider,
-        panel_clock: achieved,
+        panel_clock_hz,
         fifo,
         dreq,
     }
@@ -465,7 +462,7 @@ where
         channel: Peri<'static, CH>,
         control: Peri<'static, CCH>,
         pins: P,
-        system_clock: Rate<u32, 1, 1>,
+        system_clock_hz: u32,
         config: Hub75Config,
         fb: &'static mut FB,
         descriptors: &'static mut Hub75Descriptors<FB, N>,
@@ -481,7 +478,7 @@ where
         let _ = (channel, control);
 
         let irq_line = Self::reserve(config)?;
-        let bringup = bring_up(pio, pins, system_clock, config);
+        let bringup = bring_up(pio, pins, system_clock_hz, config);
         Self::start_from(data, ctrl, bringup, config, irq_line, fb, descriptors)
     }
 }

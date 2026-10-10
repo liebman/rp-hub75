@@ -10,7 +10,7 @@ One PIO state machine streams a `hub75-framebuffer` bitplane framebuffer at the
 panel; the CPU takes one interrupt per frame.
 
 ```rust
-let hub75 = Hub75::new(pio, ch0, ch1, &mut resets, pins, clocks.system_clock.freq(),
+let hub75 = Hub75::new(pio, ch0, ch1, &mut resets, pins, clocks.system_clock.freq().to_Hz(),
                        Hub75Config::new(pac::Interrupt::DMA_IRQ_1), fb0,
                        hub75_descriptors!(Fb))?;
 // ch0 streams the panel; ch1 plays the descriptor table.
@@ -174,7 +174,7 @@ block a log call, and a blocked display loop is a frozen panel.
 The examples own the log: `defmt`, `defmt-rtt` and `panic-probe` are each example
 package's own dependencies and a log line is a plain `defmt::info!`. The library
 logs nothing, so its numbers reach the log through its accessors (`divider`,
-`panel_clock`, `refresh_hz`, `runs_per_refresh`), which is where `telemetry`'s
+`panel_clock_hz`, `refresh_hz`, `runs_per_refresh`), which is where `telemetry`'s
 startup line reads them. Neither the hal's nor the framebuffer's own defmt feature
 can be turned on — the hal wants `defmt <0.4`, the framebuffer `1.0`, and two majors
 cannot share an image.

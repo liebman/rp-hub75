@@ -90,8 +90,6 @@ pio = "0.3"
 # `pub(crate)` without it); the RT, the time driver and the critical-section impl
 # are the embassy example's.
 embassy-rp = { version = "0.10", optional = true, default-features = false }
-# The `Rate` type the API uses; `rp-hal` re-exports it, `embassy-rp` does not.
-fugit = "0.3"
 # The `StaticCell` `hub75_descriptors!` allocates, so a real dependency.
 static_cell = "2.1"
 

@@ -18,7 +18,6 @@ use crate::driver::Hub75Error;
 use crate::driver::Hub75Pins;
 use crate::driver::achieved_clock;
 use crate::driver::divider_for;
-use fugit::Rate;
 use hal::dma::SingleChannel;
 use hal::gpio::DynPinId;
 use hal::gpio::FunctionNull;
@@ -418,23 +417,21 @@ pub(crate) fn bring_up<P: Hub75Pins>(
     pio: pac::PIO0,
     resets: &mut pac::RESETS,
     pins: P,
-    system_clock: Rate<u32, 1, 1>,
+    system_clock_hz: u32,
     config: Hub75Config,
 ) -> super::BringUp<P> {
     // A word every `CYCLES_PER_WORD` PIO cycles, so the divider is the ratio
     // between the system clock and that many times the panel clock, rounded up
     // so the panel never runs faster than the clock it was given.
-    let divider = divider_for(system_clock.to_Hz(), config.panel_clock.to_Hz());
+    let divider = divider_for(system_clock_hz, config.panel_clock_hz);
     assert!(
         divider >= 1 && divider <= u16::MAX as u32,
         "the panel clock is not representable: divider {divider} is outside \
-         the PIO's 1..=65535 range (system clock {} Hz, panel clock {} Hz)",
-        system_clock.to_Hz(),
-        config.panel_clock.to_Hz()
+         the PIO's 1..=65535 range (system clock {system_clock_hz} Hz, panel clock {} Hz)",
+        config.panel_clock_hz
     );
     let divider = divider as u16;
-    let achieved =
-        Rate::<u32, 1, 1>::from_raw(achieved_clock(system_clock.to_Hz(), divider as u32));
+    let panel_clock_hz = achieved_clock(system_clock_hz, divider as u32);
 
     let (mut pio, sm0, _, _, _) = pio.split(resets);
 
@@ -481,7 +478,7 @@ pub(crate) fn bring_up<P: Hub75Pins>(
     BringUp {
         pins,
         divider,
-        panel_clock: achieved,
+        panel_clock_hz,
         fifo: tx.fifo_address() as u32,
         dreq: tx.dreq_value(),
     }
@@ -618,7 +615,7 @@ where
         control: CCH,
         resets: &mut pac::RESETS,
         pins: P,
-        system_clock: Rate<u32, 1, 1>,
+        system_clock_hz: u32,
         config: Hub75Config,
         fb: &'static mut FB,
         descriptors: &'static mut Hub75Descriptors<FB, N>,
@@ -628,7 +625,7 @@ where
         CCH: ChannelSetup,
     {
         let irq_line = Self::reserve(config)?;
-        let bringup = bring_up(pio, resets, pins, system_clock, config);
+        let bringup = bring_up(pio, resets, pins, system_clock_hz, config);
         Self::start_from(channel, control, bringup, config, irq_line, fb, descriptors)
     }
 }

@@ -41,7 +41,6 @@ use crate::backend;
 use crate::hal;
 use critical_section::Mutex;
 
-use fugit::Rate;
 use hal::pac;
 use hub75_framebuffer::FrameBuffer;
 
@@ -61,7 +60,7 @@ const CYCLES_PER_WORD: u32 = 2;
 /// asked for, and truncating overshoots it — 20 MHz from a 150 MHz system clock
 /// would divide by 3 rather than 4 and run the panel at 25 MHz. Integer dividers
 /// are what the PIO is given here, so a request no divider hits exactly is met
-/// with the next slower clock; [`Hub75::panel_clock`] reports what was achieved.
+/// with the next slower clock; [`Hub75::panel_clock_hz`] reports what was achieved.
 pub(crate) fn divider_for(system_clock_hz: u32, panel_clock_hz: u32) -> u32 {
     // Saturating and at least one, so a degenerate request reaches the caller's
     // assertion as a number rather than as a division by zero.
@@ -89,8 +88,8 @@ pub struct Hub75Config {
     /// [`on_dma_irq`] must name the same `DMA_IRQ_n`. The driver cannot read the
     /// vector table, so a mismatch stops after one frame.
     pub interrupt: pac::Interrupt,
-    /// Panel shift-clock frequency — one word, one column, per period.
-    pub panel_clock: Rate<u32, 1, 1>,
+    /// Panel shift clock in hertz — one word, one column, per period.
+    pub panel_clock_hz: u32,
 }
 
 impl Hub75Config {
@@ -101,26 +100,26 @@ impl Hub75Config {
     /// request rather than a recommendation: with a 150 MHz system clock the PIO
     /// divider rounds it to `/8`, 9.375 MHz. The clock is a ceiling — the
     /// divider is rounded up, so a panel runs at the requested clock or the next
-    /// slower one, and [`Hub75::panel_clock`] reports which — so raise it toward
-    /// a panel's rating with [`with_panel_clock`](Self::with_panel_clock). The
+    /// slower one, and [`Hub75::panel_clock_hz`] reports which — so raise it toward
+    /// a panel's rating with [`with_panel_clock_hz`](Self::with_panel_clock_hz). The
     /// refresh rate follows the framebuffer's own sequence; see
     /// [`Hub75::refresh_hz`].
     #[must_use]
     pub const fn new(interrupt: pac::Interrupt) -> Self {
         Self {
             interrupt,
-            panel_clock: Rate::<u32, 1, 1>::MHz(10),
+            panel_clock_hz: 10_000_000,
         }
     }
 
-    /// Sets the panel shift clock. See [`Hub75Config::new`].
+    /// Sets the panel shift clock in hertz. See [`Hub75Config::new`].
     ///
     /// The clock is a ceiling: the PIO divider is rounded up, so the panel runs at
-    /// the requested clock or the next slower one ([`Hub75::panel_clock`] reports
+    /// the requested clock or the next slower one ([`Hub75::panel_clock_hz`] reports
     /// which).
     #[must_use]
-    pub const fn with_panel_clock(mut self, panel_clock: Rate<u32, 1, 1>) -> Self {
-        self.panel_clock = panel_clock;
+    pub const fn with_panel_clock_hz(mut self, panel_clock_hz: u32) -> Self {
+        self.panel_clock_hz = panel_clock_hz;
         self
     }
 }
@@ -408,8 +407,8 @@ fn unmask_interrupt(_irq: pac::Interrupt) {}
 pub struct Hub75<FB: FrameBuffer + 'static, P: Hub75Pins> {
     /// PIO clock divider actually used, for reporting.
     divider: u16,
-    /// Panel clock actually achieved: the request rounded to a divider.
-    panel_clock: Rate<u32, 1, 1>,
+    /// Panel clock actually achieved in hertz: the request rounded to a divider.
+    panel_clock_hz: u32,
     /// Words streamed per refresh, from the framebuffer's own sequence.
     frame_words: u32,
     /// Runs the interrupt services per refresh.
@@ -474,7 +473,7 @@ where
         let backend::BringUp {
             pins,
             divider,
-            panel_clock,
+            panel_clock_hz,
             fifo,
             dreq,
         } = bringup;
@@ -496,7 +495,7 @@ where
             &control,
             pins,
             divider,
-            panel_clock,
+            panel_clock_hz,
             config.interrupt,
             irq_line,
             fb,
@@ -523,7 +522,7 @@ where
         control: &impl backend::ChannelSetup,
         pins: P,
         divider: u16,
-        panel_clock: Rate<u32, 1, 1>,
+        panel_clock_hz: u32,
         interrupt: pac::Interrupt,
         irq_line: u8,
         fb: &'static mut FB,
@@ -572,7 +571,7 @@ where
 
         Self {
             divider,
-            panel_clock,
+            panel_clock_hz,
             frame_words,
             runs,
             pins,
@@ -580,9 +579,9 @@ where
         }
     }
 
-    /// The panel clock actually achieved, after the divider rounding.
-    pub fn panel_clock(&self) -> Rate<u32, 1, 1> {
-        self.panel_clock
+    /// The panel clock actually achieved in hertz, after the divider rounding.
+    pub fn panel_clock_hz(&self) -> u32 {
+        self.panel_clock_hz
     }
 
     /// The PIO clock divider in use.
@@ -596,7 +595,7 @@ where
     /// whole BCM sequence, so this is the panel clock divided by the words the
     /// sequence streams.
     pub fn refresh_hz(&self) -> u32 {
-        self.panel_clock.to_Hz() / self.frame_words
+        self.panel_clock_hz / self.frame_words
     }
 
     /// Runs one refresh is made of: the length of the descriptor table.
@@ -717,15 +716,24 @@ impl<FB: 'static> Hub75Swap<FB> {
 
     /// Parks the caller until the swap completes.
     ///
-    /// The interrupt wakes it at the frame boundary, so this is the executor form
-    /// of [`wait`](Self::wait).
+    /// After this resolves, call [`wait`](Self::wait) to obtain the outgoing
+    /// framebuffer; the boundary has passed, so it returns without spinning.
+    /// Unlike `wait`, this does not consume the handle.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut swap = hub75.swap(fb)?;
+    /// swap.wait_for_done().await;
+    /// fb = swap.wait();
+    /// ```
     ///
     /// # Cancellation Safety
     ///
     /// Dropping the future leaves its waker registered until the next frame
     /// boundary, where the handler takes it. The swap still completes, because the
-    /// handler applies it regardless of the waker. Reclaim the outgoing buffer with
-    /// [`wait`](Self::wait) or by awaiting again.
+    /// handler applies it regardless of the waker. Call [`wait`](Self::wait)
+    /// afterwards to reclaim the outgoing framebuffer.
     pub async fn wait_for_done(&mut self) {
         core::future::poll_fn(|cx| {
             if self.is_done() {
@@ -775,8 +783,8 @@ mod tests {
         use crate::hal::pac::Interrupt;
 
         let config = Hub75Config::new(Interrupt::DMA_IRQ_1);
-        assert_eq!(config.panel_clock.to_Hz(), 10_000_000);
-        let divider = divider_for(150_000_000, config.panel_clock.to_Hz());
+        assert_eq!(config.panel_clock_hz, 10_000_000);
+        let divider = divider_for(150_000_000, config.panel_clock_hz);
         assert_eq!(divider, 8);
         assert_eq!(achieved_clock(150_000_000, divider), 9_375_000);
     }
