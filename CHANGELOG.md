@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+## [0.1.0] - 2026-10-10
+
 ### Added
 
 * The `rp-hub75` driver: one PIO state machine streams the framebuffer and two DMA
@@ -26,3 +28,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-url -->
 [Unreleased]: https://github.com/liebman/rp-hub75/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/liebman/rp-hub75/compare/v0.1.0...v0.1.0
