@@ -80,10 +80,6 @@ pub(crate) fn achieved_clock(system_clock_hz: u32, divider: u32) -> u32 {
 // ---------------------------------------------------------------------------
 
 /// How the panel is driven.
-///
-/// Electrical polarity is a build-time feature, not a field: `invert-clock`
-/// moves the edge a column is sampled on and `invert-oe` the level that blanks
-/// the panel.
 #[derive(Debug, Clone, Copy)]
 pub struct Hub75Config {
     /// DMA interrupt line bound to [`on_dma_irq`].
@@ -98,14 +94,22 @@ pub struct Hub75Config {
 }
 
 impl Hub75Config {
-    /// Creates the recommended configuration: an 18.75 MHz panel clock
-    /// (150 MHz / 4 / 2) on `interrupt`. The refresh rate follows the
-    /// framebuffer's own sequence; see [`Hub75::refresh_hz`].
+    /// Creates a new configuration with a 10 MHz panel clock request on
+    /// `interrupt`.
+    ///
+    /// The clock a panel tolerates is panel-dependent, so this is a conservative
+    /// request rather than a recommendation: with a 150 MHz system clock the PIO
+    /// divider rounds it to `/8`, 9.375 MHz. The clock is a ceiling — the
+    /// divider is rounded up, so a panel runs at the requested clock or the next
+    /// slower one, and [`Hub75::panel_clock`] reports which — so raise it toward
+    /// a panel's rating with [`with_panel_clock`](Self::with_panel_clock). The
+    /// refresh rate follows the framebuffer's own sequence; see
+    /// [`Hub75::refresh_hz`].
     #[must_use]
     pub const fn new(interrupt: pac::Interrupt) -> Self {
         Self {
             interrupt,
-            panel_clock: Rate::<u32, 1, 1>::kHz(18_750),
+            panel_clock: Rate::<u32, 1, 1>::MHz(10),
         }
     }
 
@@ -140,20 +144,16 @@ pub enum Hub75Error {
 // Pins
 // ---------------------------------------------------------------------------
 
-/// A HUB75 bus the driver can stream: the framebuffer word it carries and the
-/// program that drives it.
+/// A HUB75 bus the driver can stream: the framebuffer word it carries.
 ///
 /// A [`Hub75`] is generic over its pin set and requires the set's
 /// [`Word`](Self::Word) to equal the framebuffer's, so 8-bit pins with a 16-bit
-/// framebuffer is a compile error rather than a scrambled picture. The pin set
-/// also decides the program and the window width, which is what keeps `out pins,
-/// N` and the word width in step.
+/// framebuffer is a compile error rather than a scrambled picture. The program
+/// and the window width follow from the word, which is what keeps `out pins, N`
+/// and the word width in step.
 pub trait Hub75Pins: 'static {
     /// The framebuffer word width this bus carries.
     type Word: BusWord;
-
-    /// The stream program and the window width it writes.
-    fn stream() -> crate::backend::Stream;
 
     /// The GPIO number the window's first pin is on.
     fn base(&self) -> u8;
@@ -227,12 +227,10 @@ impl Engine {
         irq_line: 0,
     };
 
-    /// Applies a pending swap: the framebuffer base, and the table the control
-    /// channel plays next.
+    /// Applies the pending swap's delta to the framebuffer base and every run's
+    /// address in the table.
     ///
-    /// Returns whether a swap was applied. The base moves first, so a swap armed
-    /// while this runs is measured from the framebuffer that is about to be
-    /// scanned rather than the one leaving the panel.
+    /// Returns whether a swap was applied.
     fn apply_pending(&mut self) -> bool {
         let Some(delta) = self.pending.take() else {
             return false;
@@ -767,6 +765,20 @@ mod tests {
         assert_eq!(divider_for(100_000_000, 25_000_000), 2);
         // From a slower system clock the same request needs a smaller divider.
         assert_eq!(divider_for(48_000_000, 10_000_000), 3);
+    }
+
+    /// The default request is the conservative one: 10 MHz, which the reference
+    /// board's 150 MHz system clock rounds to the next slower divider.
+    #[test]
+    fn default_panel_clock_is_conservative() {
+        use super::Hub75Config;
+        use crate::hal::pac::Interrupt;
+
+        let config = Hub75Config::new(Interrupt::DMA_IRQ_1);
+        assert_eq!(config.panel_clock.to_Hz(), 10_000_000);
+        let divider = divider_for(150_000_000, config.panel_clock.to_Hz());
+        assert_eq!(divider, 8);
+        assert_eq!(achieved_clock(150_000_000, divider), 9_375_000);
     }
 
     /// Whatever the request, the panel ends up at that clock or slower.

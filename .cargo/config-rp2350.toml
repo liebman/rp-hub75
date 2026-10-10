@@ -33,5 +33,3 @@ rustflags = [
 # The debug probe flashes, runs and carries defmt back over RTT in one step:
 # `cargo run-rp2350 --example gradient`, with the CMSIS-DAP probe attached.
 runner = "probe-rs run --chip RP235x"
-# Without a probe, flash over the USB-C bootloader instead: hold BOOT, tap RESET,
-# then `picotool load -u -v -x -t elf <elf>`.

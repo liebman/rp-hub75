@@ -34,9 +34,10 @@ change must not break, and the commands that verify it.
   fourteen-pin direct-drive bus, `Hub75Pins8` the eight-signal latched one
   (`R1 G1 B1 R2 G2 B2 LAT OE`, row address in trailing `Address` bytes). A `Hub75`
   requires the pin set's `Word` to equal the framebuffer's, so a mismatched pair does
-  not type-check; the trait also returns the `programs::Stream`, so `out pins, N`
-  cannot fall out of step with the word. The 8-bit window has no reserved bit, so its
-  clock is always outside it (`pins::latched`, pinned to `LATCHED_PINMAP`).
+  not type-check; the word width selects the program (`programs::stream_for`), so
+  `out pins, N` cannot fall out of step with the word. The 8-bit window has no
+  reserved bit, so its clock is always outside it (`pins::latched`, pinned to
+  `LATCHED_PINMAP`).
 * The backend is a build-time choice on two features named together — backend
   (`rphal` or `embassy`) and chip (`rp2040` or `rp2350`); neither is a default.
   `src/backend/mod.rs` is the only place the choice is read; `src/driver.rs`,
@@ -81,7 +82,7 @@ lines: each one is shaped around the bare-metal target.
 | `./build-all.sh` | The library in the four polarity combinations via `cargo build-rp2350`, then each example package with `(cd examples/<name> && cargo build-rp2350)` and the RP2040 example with `cargo build-rp2040`. The library alias names `.cargo/config-rp2350.toml` and `rphal,rp2350`; no feature is a default. |
 | `./clippy-all.sh` | `cargo clippy-rp2350 --lib` on the library — not `--all-targets`: the test harness needs `core::test`, which does not exist for this target — and `cargo clippy-rp2350` in each example package. |
 | `./fmt-all.sh` | `cargo fmt` in the root and in each example package (they are separate crates), then `--check`. `./fmt-all.sh --check` is the CI pass: it reports and does not write. Do not add a `rustfmt.toml` without agreeing on it. |
-| `cd examples/gradient && cargo run-rp2350` | Builds, flashes and runs over the debug probe (`probe-rs run --chip RP235x`), and streams the `defmt` log back on the same terminal. Without a probe, flash over the USB-C bootloader instead: hold BOOT, tap RESET, `picotool load -u -v -x -t elf <elf>`. |
+| `cd examples/gradient && cargo run-rp2350` | Builds, flashes and runs over the debug probe (`probe-rs run --chip RP235x`), and streams the `defmt` log back on the same terminal. |
 | `cd examples/gradient-latched && cargo build-rp2040` | The same, for the RP2040: the example's alias names `.cargo/config-rp2040.toml` (target `thumbv6m-none-eabi`, `probe-rs run --chip RP2040`) and its `rp2040` feature; no feature is a default. Every example defines `build-rp2040`/`run-rp2040`. |
 | `cargo build-embassy` (root) / `cd examples/gradient-embassy && cargo run-rp2350` | The embassy-rp backend: the root alias builds the library against `embassy-rp`; the example package builds and flashes the embassy example through its own alias. |
 | `cargo doc-rp2350` | Checks that the documentation builds (the alias names the board and the `--no-deps` flag). A `rustdoc` warning is a bug — nothing denies them here, and there is no `cargo xtask` in this crate. |

@@ -68,6 +68,7 @@
 //! one, and the address lines move while the panel is blanked. `hub75-framebuffer`
 //! has a `tail-closes-latch` feature if a panel wants the latch a word later.
 
+use crate::descriptor::BusWord;
 use crate::pins;
 use pio::{Program, RP2040_MAX_PROGRAM_SIZE};
 
@@ -76,7 +77,7 @@ use pio::{Program, RP2040_MAX_PROGRAM_SIZE};
 /// The program and the `out pins, N` count are one decision: a program that
 /// shifts fourteen bits into an eight-pin window drives the wrong pins. Holding
 /// both here keeps a single source for the pair.
-pub struct Stream {
+pub(crate) struct Stream {
     program: Program<{ RP2040_MAX_PROGRAM_SIZE }>,
     window: u8,
 }
@@ -120,7 +121,7 @@ impl Stream {
 /// at its idle level, so the panel gets a full cycle of setup before the edge it
 /// samples. A panel that wants the falling edge gets it from the clock pin's
 /// output override rather than from a second program — see [`crate::driver`].
-pub fn hub75_stream16() -> Stream {
+pub(crate) fn hub75_stream16() -> Stream {
     Stream {
         program: pio::pio_asm!(
             ".side_set 1",
@@ -144,7 +145,7 @@ pub fn hub75_stream16() -> Stream {
 /// as [`hub75_stream16`] describes, with `out_pins(base, stream.window())`; the
 /// clock is the side-set pin and, the 8-bit window having no reserved slot, is
 /// wired outside it.
-pub fn hub75_stream8() -> Stream {
+pub(crate) fn hub75_stream8() -> Stream {
     Stream {
         program: pio::pio_asm!(
             ".side_set 1",
@@ -155,5 +156,19 @@ pub fn hub75_stream8() -> Stream {
         )
         .program,
         window: pins::latched::WORD_PINS,
+    }
+}
+
+/// The stream program a bus word width selects.
+///
+/// The word is the bus, so its width picks the program and the window: one byte
+/// is the eight-pin latched bus ([`hub75_stream8`]), two bytes the fourteen-pin
+/// direct-drive one ([`hub75_stream16`]). Deriving it from [`BusWord::BYTES`]
+/// keeps `out pins, N` in step with the word.
+pub(crate) fn stream_for<W: BusWord>() -> Stream {
+    match W::BYTES {
+        1 => hub75_stream8(),
+        2 => hub75_stream16(),
+        _ => unreachable!("a bus word is one or two bytes"),
     }
 }

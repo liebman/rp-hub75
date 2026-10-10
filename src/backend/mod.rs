@@ -20,7 +20,7 @@ mod rphal;
 mod window;
 #[cfg(feature = "rphal")]
 #[doc(inline)]
-pub use rphal::{Hub75Pins8, Hub75Pins16, PioPin, bring_up};
+pub use rphal::{Hub75Pins8, Hub75Pins16, PioPin};
 #[cfg(feature = "rphal")]
 pub(crate) use rphal::{arm, clear_intr, intr_pending};
 
@@ -28,7 +28,7 @@ pub(crate) use rphal::{arm, clear_intr, intr_pending};
 mod embassy;
 #[cfg(feature = "embassy")]
 #[doc(inline)]
-pub use embassy::{EmbassyPins, Hub75Pins8, Hub75Pins16, PioPin, bring_up};
+pub use embassy::{EmbassyPins, Hub75Pins8, Hub75Pins16, PioPin};
 #[cfg(feature = "embassy")]
 pub(crate) use embassy::{arm, clear_intr, intr_pending};
 
@@ -38,8 +38,6 @@ pub(crate) use embassy::{arm, clear_intr, intr_pending};
 /// Shared by both backends: they use the same `pio` crate version, so a
 /// `pio::pio_asm!` program is the same type for either.
 mod programs;
-#[doc(inline)]
-pub use programs::{Stream, hub75_stream8, hub75_stream16};
 
 #[cfg(feature = "embassy")]
 pub use embassy_rp as hal;
@@ -134,7 +132,7 @@ impl ChannelSetup for embassy::DmaChannel {
 
 /// What a backend's `bring_up` returns: the started state machine's handoff to
 /// the two DMA channels.
-pub struct BringUp<P: Hub75Pins> {
+pub(crate) struct BringUp<P: Hub75Pins> {
     /// The panel pins, converted and held so nothing else can claim the bus.
     pub pins: P,
     /// The PIO clock divider in use.

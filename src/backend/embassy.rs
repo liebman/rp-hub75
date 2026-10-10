@@ -25,9 +25,7 @@ use fugit::Rate;
 use hub75_framebuffer::FrameBuffer;
 
 use super::BringUp;
-use super::programs::Stream;
-use super::programs::hub75_stream8;
-use super::programs::hub75_stream16;
+use super::programs::stream_for;
 use super::window::SIGNAL_COUNT;
 use super::window::SIGNAL_COUNT8;
 use super::window::check_bus;
@@ -185,13 +183,9 @@ pub trait EmbassyPins: Hub75Pins {
 
 /// Drives the `set_pin_dirs` loop: the signals then the clock.
 macro_rules! embassy_pins {
-    ($set:ty, $word:ty, $stream:expr, $count:expr) => {
+    ($set:ty, $word:ty, $count:expr) => {
         impl Hub75Pins for $set {
             type Word = $word;
-
-            fn stream() -> Stream {
-                $stream()
-            }
 
             fn base(&self) -> u8 {
                 self.base
@@ -225,8 +219,8 @@ macro_rules! embassy_pins {
     };
 }
 
-embassy_pins!(Hub75Pins16, u16, hub75_stream16, SIGNAL_COUNT);
-embassy_pins!(Hub75Pins8, u8, hub75_stream8, SIGNAL_COUNT8);
+embassy_pins!(Hub75Pins16, u16, SIGNAL_COUNT);
+embassy_pins!(Hub75Pins8, u8, SIGNAL_COUNT8);
 
 // ---------------------------------------------------------------------------
 // DMA channels
@@ -237,7 +231,7 @@ embassy_pins!(Hub75Pins8, u8, hub75_stream8, SIGNAL_COUNT8);
 /// embassy's `Channel` binds an interrupt and is reserved for embassy's async
 /// transfers, so the driver programs the PAC channel block directly. The index
 /// comes from the [`ChannelInstance`] the constructor is handed.
-pub struct DmaChannel {
+pub(crate) struct DmaChannel {
     id: u8,
 }
 
@@ -366,7 +360,7 @@ pub(crate) fn clear_intr(line: u8, flag: u32) {
 ///
 /// The `Pio` is leaked with [`core::mem::forget`]: embassy's `StateMachine`
 /// disables itself on drop, and this driver runs for the life of the program.
-pub fn bring_up<P: EmbassyPins>(
+pub(crate) fn bring_up<P: EmbassyPins>(
     mut pio: Pio<'static, PIO0>,
     pins: P,
     system_clock: Rate<u32, 1, 1>,
@@ -384,7 +378,7 @@ pub fn bring_up<P: EmbassyPins>(
     let achieved =
         Rate::<u32, 1, 1>::from_raw(achieved_clock(system_clock.to_Hz(), divider as u32));
 
-    let stream = P::stream();
+    let stream = stream_for::<P::Word>();
     let loaded = pio.common.load_program(stream.program());
 
     // The clock's polarity is the pad's, so the pin is inverted before the

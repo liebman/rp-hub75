@@ -1,7 +1,7 @@
 //! A HUB75 LED matrix driver for the RP2040 and RP2350.
 //!
-//! The Pimoroni Interstate 75 W is the reference wiring and the source of the
-//! measurements, not a crate invariant. The pin base, bus width and panel
+//! The Pimoroni Interstate 75 W is the reference wiring whose pin map the
+//! examples default to, not a crate invariant: the pin base, bus width and panel
 //! geometry are parameters.
 //!
 //! PIO streams a [`framebuffer`] bitplane buffer. Two DMA channels play that

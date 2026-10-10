@@ -23,7 +23,7 @@
 //!   shift register was still holding the previous row's data when the new row was
 //!   latched. It is the thing `hub75-framebuffer`'s `inter-row-blank`,
 //!   `lead-blank` and `trail-blank` features exist for; that is why this example
-//!   exists, so the leak is measured before a feature is added.
+//!   exists, so the leak is seen before a feature is added.
 //! * A ghost **on the first row while the last row is lit** (or the other way
 //!   round) is the frame boundary, which the diagonal and bar phases dwell on.
 //! * A ghost on the **other half** of the panel — row `r + 32` while row `r` is

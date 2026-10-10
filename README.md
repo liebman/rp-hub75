@@ -1,9 +1,9 @@
 # rp-hub75
 
 A HUB75 LED matrix driver for the **RP2040** and **RP2350**. The **Pimoroni
-Interstate 75 W** is the *reference board* — where the pin map and the
-measurements come from, and the (64×64, 1/32 scan) panel the examples default to
-— not the only target: the pin base, the bus wiring, the 8- or 16-bit bus, and
+Interstate 75 W** is the *reference board*: its pin map is the wiring the
+examples default to, and its (64×64, 1/32 scan) panel is the one they drive. It
+is not the only target; the pin base, the bus wiring, the 8- or 16-bit bus, and
 the panel geometry are all parameters.
 
 One PIO state machine streams a `hub75-framebuffer` bitplane framebuffer at the
@@ -139,14 +139,32 @@ is wired for it). `build-all.sh` and `clippy-all.sh` walk the directory.
 Every example here drives the panel through [`Hub75`](src/driver.rs), which is the
 only API this crate offers.
 
-Flashing and running, with the CMSIS-DAP probe attached:
+### Flashing
+
+With a CMSIS-DAP probe attached, the chip config's runner flashes, runs and
+streams the `defmt` log in one step:
 
 ```console
 cd examples/gradient && cargo run-rp2350     # flash, run, and stream the defmt log
 ```
 
-Without a probe, flash over the USB-C bootloader instead (hold BOOT, tap RESET,
-then `picotool load -u -v -x -t elf <elf>`).
+Without a probe — the board alone on USB-C — put it in BOOTSEL (hold BOOT, tap
+RESET, or hold BOOT while plugging in) and let `picotool` write the ELF's program
+headers. Build first, because a `run-*` alias needs the probe for its runner:
+
+```console
+cd examples/gradient
+cargo build-rp2350
+picotool load -u -v -x -t elf target/thumbv8m.main-none-eabihf/release/gradient
+```
+
+The ELF is `target/<triple>/release/<package>`: `thumbv8m.main-none-eabihf` for
+the RP2350 and `thumbv6m-none-eabi` for the RP2040, the file named for the
+package (`gradient`, `gradient-latched`, …). `-u` skips flash sectors that
+already match, `-v` verifies the write, and `-x` reboots into the image; `-t elf`
+names the type because Cargo emits no extension for picotool to read. There is no
+RTT without the probe, so this flashes and runs blind — the probe is what carries
+the log back.
 
 There is no UART to log to — GP0/GP1 are panel data — so the log is `defmt` over
 RTT, back up the probe's wire. `defmt-rtt` keeps `disable-blocking-mode`:

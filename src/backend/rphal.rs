@@ -9,9 +9,7 @@
 use super::BringUp;
 use super::ChannelSetup;
 use super::hal;
-use super::programs::Stream;
-use super::programs::hub75_stream8;
-use super::programs::hub75_stream16;
+use super::programs::stream_for;
 use crate::descriptor::BusWord;
 use crate::descriptor::Hub75Descriptors;
 use crate::driver::Hub75;
@@ -288,10 +286,6 @@ impl Hub75Pins16 {
 impl Hub75Pins for Hub75Pins16 {
     type Word = u16;
 
-    fn stream() -> Stream {
-        hub75_stream16()
-    }
-
     fn base(&self) -> u8 {
         self.base
     }
@@ -392,10 +386,6 @@ impl Hub75Pins8 {
 impl Hub75Pins for Hub75Pins8 {
     type Word = u8;
 
-    fn stream() -> Stream {
-        hub75_stream8()
-    }
-
     fn base(&self) -> u8 {
         self.base
     }
@@ -424,7 +414,7 @@ impl Hub75Pins for Hub75Pins8 {
 /// The panel clock is a ceiling: the PIO divider is an integer and is rounded
 /// up, so a request no divider hits exactly runs the panel at the next slower
 /// clock rather than faster than the panel is rated for.
-pub fn bring_up<P: Hub75Pins>(
+pub(crate) fn bring_up<P: Hub75Pins>(
     pio: pac::PIO0,
     resets: &mut pac::RESETS,
     pins: P,
@@ -462,7 +452,7 @@ pub fn bring_up<P: Hub75Pins>(
     #[cfg(feature = "invert-clock")]
     pins.invert_clock();
 
-    let stream = P::stream();
+    let stream = stream_for::<P::Word>();
     let program = pio
         .install(stream.program())
         .expect("the stream program fits the instruction memory");
