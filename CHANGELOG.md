@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+## [0.1.1] - 2026-10-10
+
 ### Changed
 
 * improved module documentation
@@ -31,5 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delays and `reverse-row-order`.
 
 <!-- next-url -->
-[Unreleased]: https://github.com/liebman/rp-hub75/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/liebman/rp-hub75/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/liebman/rp-hub75/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/liebman/rp-hub75/compare/v0.1.0...v0.1.0

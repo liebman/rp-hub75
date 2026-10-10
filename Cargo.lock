@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "rp-hub75"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cortex-m",
  "critical-section",

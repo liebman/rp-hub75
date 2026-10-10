@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 name = "rp-hub75"
 repository = "https://github.com/liebman/rp-hub75"
 rust-version = "1.85"
-version = "0.1.0"
+version = "0.1.1"
 
 [lib]
 name = "rp_hub75"
