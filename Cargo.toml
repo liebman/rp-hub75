@@ -2,10 +2,12 @@
 authors = ["liebman <liebman@zod.com>"]
 categories = ["embedded", "hardware-support", "no-std"]
 description = "A HUB75 LED matrix driver for RP2040 and RP2350 (Pimoroni Interstate 75 W)"
+documentation = "https://docs.rs/rp-hub75"
 edition = "2024"
 keywords = ["hub75", "rp2040", "rp2350", "led-matrix", "embedded"]
 license = "MIT OR Apache-2.0"
 name = "rp-hub75"
+repository = "https://github.com/liebman/rp-hub75"
 rust-version = "1.85"
 version = "0.1.0"
 
@@ -70,6 +72,13 @@ inter-row-blank-16 = ["hub75-framebuffer/inter-row-blank-16"]
 inter-row-blank-32 = ["hub75-framebuffer/inter-row-blank-32"]
 
 reverse-row-order = ["hub75-framebuffer/reverse-row-order"]
+
+# docs.rs builds with the same crate defaults as any other consumer, and the
+# crate has no default target feature: without naming one, the backend selection
+# in `src/backend/mod.rs` has nothing to read. The rp2350 rp-hal backend is the
+# reference wiring the examples document.
+[package.metadata.docs.rs]
+features = ["rphal-rp2350"]
 
 [dependencies]
 # Shared with the DMA interrupt, so in a `critical_section::Mutex` (and an
