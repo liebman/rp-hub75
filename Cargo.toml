@@ -42,8 +42,7 @@ rp2040 = ["embassy-rp?/rp2040"]
 # `hub75-framebuffer` change the words it streams.
 #
 # Invert the clock pin's output in the GPIO block, for a panel that takes a column
-# on the clock's falling edge. Builds for both chips; measured on the RP2350,
-# untested on the RP2040.
+# on the clock's falling edge.
 invert-clock = []
 
 # Forward the output-enable polarity to `hub75-framebuffer`: the OE pin is driven

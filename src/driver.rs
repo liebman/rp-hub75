@@ -1,13 +1,7 @@
-//! The driver: one PIO state machine, two DMA channels, and one interrupt a
-//! frame.
+//! One PIO state machine, two DMA channels, one interrupt per frame.
 //!
-//! # What runs the panel
-//!
-//! A single state machine streams framebuffer words straight at the HUB75 pin
-//! window (see [`crate::backend`]). A **control** DMA channel plays a
-//! [`crate::descriptor`] table into the data channel's `AL3` register block, and
-//! the data channel chains back to it on every completion, so the two hand the
-//! picture to each other in hardware:
+//! A control DMA channel plays a descriptor table into the data channel's `AL3`
+//! register block, and the data channel chains back on completion:
 //!
 //! ```text
 //! control channel  (trans_count, read_addr) → the data channel's AL3 block
@@ -16,28 +10,24 @@
 //!                  completes, chains to the control channel
 //! ```
 //!
-//! The table is the framebuffer's own BCM sequence, materialised by
-//! [`crate::descriptor::fill`]. Plane-major, row-major, threshold and remapped
-//! framebuffers all drive the same code, with the layout only changing the *cost*,
-//! which [`Hub75::runs_per_refresh`] reports. [`crate::descriptor`] has the table's
-//! shape, the terminator that gives one interrupt a frame, and the delta a swap
-//! applies.
+//! [`crate::descriptor::fill`] builds the table from the framebuffer's BCM
+//! sequence. Plane-major, row-major, threshold and remapped framebuffers all
+//! drive the same code; [`Hub75::runs_per_refresh`] reports the cost.
+//! [`crate::descriptor`] has the table's shape and the swap delta.
 //!
 //! # The interrupt
 //!
-//! The application binds the handler; the driver does not define one, so the
-//! line stays the application's choice:
+//! The application owns the vector; the driver defines none.
 //!
 //! ```text
 //! #[unsafe(no_mangle)]
 //! extern "C" fn DMA_IRQ_1() { rp_hub75::on_dma_irq(); }
 //! ```
 //!
-//! The handler *is* the vector-table symbol: `rp235x-hal` does not re-export
-//! `cortex_m_rt::interrupt`, and that macro in device mode wants a crate named
-//! `interrupt` this PAC does not provide. The line is named in
-//! [`Hub75Config::new`] — the only way the driver knows which one to unmask; a
-//! mismatch means nothing moves.
+//! `rp235x-hal` does not re-export `cortex_m_rt::interrupt`, and that macro in
+//! device mode wants a crate named `interrupt` this PAC does not provide, so the
+//! handler is the vector-table symbol. [`Hub75Config::new`] names the line to
+//! unmask; a mismatch means nothing moves.
 
 use core::cell::Cell;
 use core::cell::RefCell;
@@ -91,29 +81,26 @@ pub(crate) fn achieved_clock(system_clock_hz: u32, divider: u32) -> u32 {
 
 /// How the panel is driven.
 ///
-/// What a panel wants *electrically* is a build-time choice, not a field: the
-/// `invert-clock` feature moves the edge it samples a column on, and
-/// `invert-oe` the level that blanks it.
+/// Electrical polarity is a build-time feature, not a field: `invert-clock`
+/// moves the edge a column is sampled on and `invert-oe` the level that blanks
+/// the panel.
 #[derive(Debug, Clone, Copy)]
 pub struct Hub75Config {
-    /// DMA interrupt line the application bound [`on_dma_irq`] to.
+    /// DMA interrupt line bound to [`on_dma_irq`].
     ///
-    /// Required, because the interrupt is what restarts the chain at each frame
-    /// boundary: without it the panel plays one frame and stops. The pairing is
-    /// the application's — this value and the `#[interrupt]` function calling
-    /// [`on_dma_irq`] must name the *same* line, and the driver cannot check that
-    /// (nothing in the vector table is readable that way), so a mismatch simply
-    /// means a still picture.
+    /// Required: the terminator IRQ restarts the chain, so without it the panel
+    /// plays one frame and stops. This value and the vector-table symbol calling
+    /// [`on_dma_irq`] must name the same `DMA_IRQ_n`. The driver cannot read the
+    /// vector table, so a mismatch stops after one frame.
     pub interrupt: pac::Interrupt,
     /// Panel shift-clock frequency — one word, one column, per period.
     pub panel_clock: Rate<u32, 1, 1>,
 }
 
 impl Hub75Config {
-    /// The recommended configuration: an 18.75 MHz panel clock and `interrupt`
-    /// as the wake-up line, which is 150 MHz / 4 / 2 — a word every two PIO
-    /// cycles, and a refresh rate that follows the framebuffer's own sequence
-    /// ([`Hub75::refresh_hz`]).
+    /// Creates the recommended configuration: an 18.75 MHz panel clock
+    /// (150 MHz / 4 / 2) on `interrupt`. The refresh rate follows the
+    /// framebuffer's own sequence; see [`Hub75::refresh_hz`].
     #[must_use]
     pub const fn new(interrupt: pac::Interrupt) -> Self {
         Self {
@@ -134,20 +121,18 @@ impl Hub75Config {
     }
 }
 
-/// What can go wrong.
+/// Errors the driver returns.
 ///
-/// There is deliberately not much: the only failure modes are the API being used
-/// out of order, or a framebuffer whose layout this driver cannot cache.
+/// The failure modes are the API used out of order, and a framebuffer layout the
+/// engine cannot cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hub75Error {
-    /// A driver already exists. There is one PIO, two channels and one table,
-    /// and the driver runs for ever, so a second instance would be a bug.
+    /// A driver already exists: there is one PIO, two channels and one table.
     AlreadyInitialised,
-    /// A swap is still in flight. Wait for the previous one — which hands the
-    /// outgoing framebuffer back — before arming another.
+    /// The previous [`Hub75::swap`] has not been waited for.
     SwapInFlight,
-    /// The interrupt in the configuration is not one of the four DMA lines, so
-    /// no completion can ever reach it.
+    /// `config.interrupt` is not `DMA_IRQ_0` or `DMA_IRQ_1`. The RP2350 adds
+    /// `DMA_IRQ_2` and `DMA_IRQ_3`; the RP2040 has two lines.
     NotADmaIrq,
 }
 
@@ -350,23 +335,19 @@ impl IrqWaker {
 /// The swap state's waker.
 static WAKER: IrqWaker = IrqWaker::new();
 
-/// The DMA completion handler: apply a swap, and set the next frame going.
+/// Acknowledges the data channel, patches a pending swap, restarts the control
+/// channel, and wakes a waiting [`Hub75Swap`].
 ///
-/// The only interrupt the engine raises is the table's terminator, so this runs
-/// once a frame — by which time the control channel has stopped — and does four
-/// things: acknowledge the data channel, patch the table if a swap is pending,
-/// restart the chain, and wake a waiting swap.
-///
-/// Call it from the handler bound to the line named in [`Hub75Config::new`]:
+/// Bind it to the line named in [`Hub75Config::new`]:
 ///
 /// ```text
 /// #[unsafe(no_mangle)]
 /// extern "C" fn DMA_IRQ_1() { rp_hub75::on_dma_irq(); }
 /// ```
 ///
-/// It is safe to call for *any* interrupt routed to that line: with no driver
-/// running it touches nothing, and a completion from a neighbouring channel that
-/// shares the line is ignored rather than stepping the frame.
+/// The table terminator is the only source, so this runs once a frame, after the
+/// control channel has stopped. Any interrupt on the line is safe: with no driver
+/// running it touches nothing, and another channel's completion is ignored.
 pub fn on_dma_irq() {
     let swapped = critical_section::with(|cs| {
         let mut engine = ENGINE.borrow_ref_mut(cs);
@@ -408,13 +389,14 @@ pub fn on_dma_irq() {
 
 /// Unmasks the DMA interrupt line the driver watches.
 ///
-/// Arm only: the host, where the library's unit tests run, has no NVIC and runs
-/// no panel, so there the call is a no-op that only has to type-check. On both
-/// the RP2040 and the RP2350 the PAC's `Interrupt` implements `InterruptNumber`,
-/// which is why the call is the same on both.
+/// The host test target has no NVIC, so there the call is a no-op that only
+/// type-checks. On both chips the PAC's `Interrupt` implements `InterruptNumber`,
+/// so one call serves both.
 #[cfg(target_arch = "arm")]
 fn unmask_interrupt(irq: pac::Interrupt) {
-    // SAFETY: the application bound `on_dma_irq` to this line.
+    // SAFETY: `irq` is the line named in `Hub75Config`, and the application has
+    // bound the vector for it to `on_dma_irq`. A line with no handler installed
+    // vectors to the default handler, which does not touch the engine.
     unsafe { cortex_m::peripheral::NVIC::unmask(irq) }
 }
 
@@ -737,9 +719,15 @@ impl<FB: 'static> Hub75Swap<FB> {
 
     /// Parks the caller until the swap completes.
     ///
-    /// The driver's interrupt wakes it at the frame boundary, so this is the
-    /// executor-friendly form of [`wait`](Self::wait): a swap completes once per
-    /// frame, and the walk that owns `old` is done at that instant.
+    /// The interrupt wakes it at the frame boundary, so this is the executor form
+    /// of [`wait`](Self::wait).
+    ///
+    /// # Cancellation Safety
+    ///
+    /// Dropping the future leaves its waker registered until the next frame
+    /// boundary, where the handler takes it. The swap still completes, because the
+    /// handler applies it regardless of the waker. Reclaim the outgoing buffer with
+    /// [`wait`](Self::wait) or by awaiting again.
     pub async fn wait_for_done(&mut self) {
         core::future::poll_fn(|cx| {
             if self.is_done() {

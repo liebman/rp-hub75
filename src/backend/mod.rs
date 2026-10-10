@@ -1,17 +1,14 @@
 //! The HAL port: the one place the target HAL is chosen.
 //!
-//! `rp-hub75` drives the panel through whichever HAL the build selects, and the
-//! selection is a feature, so exactly one backend is compiled. This module is
-//! where that choice is written down: it re-exports the selected HAL as [`hal`],
-//! and it hides the few operations whose *shape* differs between the HALs behind
-//! names the rest of the crate uses with no conditional compilation of its own.
+//! The backend feature selects the HAL, so exactly one is compiled. The selected
+//! HAL is re-exported as [`hal`], and the operations whose shape differs are
+//! hidden here behind names the rest of the crate uses without `cfg`.
 //!
-//! The driver's register operations are written against `hal::pac`, whose
-//! method and field names are the same on every part (the register blocks are the
-//! same shape), so they need no port. What does differ is how a HAL hands over a
-//! DMA channel: `rp-hal` exposes `SingleChannel::ch` and `SingleChannel::id`,
-//! while `embassy-rp` exposes `Channel::regs` and `Channel::number`. That one
-//! difference is [`ChannelSetup`], implemented once per backend.
+//! The driver's register operations use `hal::pac`, whose field names are the
+//! same on both parts, so they need no port. The difference is how a HAL hands
+//! over a DMA channel: `rp-hal` exposes `SingleChannel::ch` and `id`,
+//! `embassy-rp` exposes `Channel::regs` and `number`. [`ChannelSetup`] is that
+//! difference, implemented once per backend.
 
 use crate::driver::Hub75Pins;
 use fugit::Rate;

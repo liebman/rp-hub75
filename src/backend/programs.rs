@@ -1,29 +1,28 @@
 //! PIO programs the driver runs against the panel.
 //!
-//! **One state machine** streams a `hub75-framebuffer` buffer straight at the
-//! panel's pins: the words in the framebuffer *are* the pin levels the panel
-//! receives, with no per-column CPU work and no conversion pass. The framebuffer's
-//! word width picks between the two programs, and a [`Stream`] carries the
-//! assembled program and the window width it writes, so the two cannot drift
-//! apart:
+//! One state machine streams a `hub75-framebuffer` buffer at the panel pins: the
+//! words in the framebuffer are the pin levels the panel receives, with no
+//! per-column CPU work. The word width picks the program, and a [`Stream`]
+//! carries the assembled program and the window width it writes:
 //!
 //! * [`hub75_stream16`] shifts a 16-bit word into the fourteen-signal direct-drive
 //!   bus (the `interstate75` layout) with `out pins, 14`.
 //! * [`hub75_stream8`] shifts an 8-bit word into an eight-signal latched bus
 //!   (the `bitplane::latched` layouts) with `out pins, 8`.
 //!
-//! # One state machine, because a word is already in pin order
+//! # One state machine
 //!
 //! `out pins, N` writes pins `[OUT_BASE, OUT_BASE + N - 1]`, and `OUT_BASE` is
-//! fixed when the state machine is built: no PIO instruction can move it. So one
-//! instruction puts a whole word on the bus only because the word's fields are
-//! already in pin order — bit *n* of a word is pin *n* of the window, which the
-//! `interstate75` feature of `hub75-framebuffer` arranges. [`crate::pins`] is that
-//! layout. The window's lowest pin is the base [`crate::Hub75Pins`] derives, so
-//! one program serves any run of fourteen GPIOs, and the only signal the PIO
-//! *generates* rather than copies out of the word is the clock.
+//! fixed when the state machine is built: no PIO instruction can move it. One
+//! instruction therefore puts a whole word on the bus only because the word's
+//! fields are already in pin order — bit *n* of a word is pin *n* of the window,
+//! which the `interstate75` feature of `hub75-framebuffer` arranges and
+//! [`crate::pins`] states. The base is the window's lowest pin, which
+//! [`crate::Hub75Pins`] derives, so one program serves any run of fourteen
+//! GPIOs. The clock is the one signal the PIO generates rather than copies out of
+//! the word.
 //!
-//! # The program: two cycles per word, one word per column
+//! # Two cycles per word
 //!
 //! ```text
 //! cycle         1                     2
@@ -33,38 +32,33 @@
 //! panel         data changes           shifts this column in
 //! ```
 //!
-//! The clock is edge triggered, so a word needs exactly two cycles: the word goes
-//! out with the clock at its idle level and is stable for a whole PIO cycle, and
-//! the edge a cycle later shifts it into the panel. A panel that takes the column
-//! on the *falling* edge gets that edge from the clock pin's output override,
-//! which inverts the pad rather than the program — [`crate::driver`] sets it under
-//! the `invert-clock` feature.
+//! The clock is edge triggered: the word goes out with the clock at its idle
+//! level and holds for a whole PIO cycle, and the next cycle's edge shifts it into
+//! the panel. A panel that takes the column on the *falling* edge gets that edge
+//! from the clock pin's output override, which inverts the pad rather than the
+//! program; [`crate::driver`] sets it under the `invert-clock` feature.
 //!
-//! # The one invariant
+//! # One FIFO word per column
 //!
-//! **One FIFO word per column.** `pull_threshold` is the stream's window width
-//! ([`Stream::threshold`]), the bits one `out pins, N` shifts out, so the OSR
-//! refills exactly on a column boundary and the word's fields cannot drift.
-//! Sixteen would leave a 14-bit word's two spare top bits in the OSR and put every
-//! following word two bits out of place.
+//! `pull_threshold` is the stream's window width ([`Stream::threshold`]), the bits
+//! one `out pins, N` shifts out, so the OSR refills on a column boundary and the
+//! word's fields cannot drift. Sixteen would leave a 14-bit word's two spare top
+//! bits in the OSR and skew every following word by two bits.
 //!
-//! # The one hair: the reserved bit
+//! # The reserved bit
 //!
-//! The slot the framebuffer keeps at zero sits inside the `out pins, 14` window, so
-//! every word drives that pin as well as the side-set does, and the bit is always
-//! zero. That costs nothing: the `out` runs on the cycle whose side-set holds the
-//! clock low, so the two write the same level and either one winning gives the same
-//! pins. The clock's polarity is the pad's, which inverts both writes together.
+//! Bit [`pins::RESERVED`] sits inside the `out pins, 14` window, so every word
+//! drives that pin and the side-set drives it too; the framebuffer holds the bit
+//! at zero, so the two writes agree and either winning gives the same level. The
+//! clock's polarity is the pad's, which inverts both writes together.
 //!
-//! An overlap is free only on that pin, which is why the clock is wired there or
-//! outside the window. A side-set aimed at another bus pin would fight every word
-//! that follows, and the side-set would win — RP2350 datasheet §11.5.6, *"If a
-//! side-set overlaps with an OUT/SET performed by that state machine on the same
-//! cycle, the side-set takes precedence in the overlapping region"* — so the
-//! corruption of that pin would be silent rather than an error. `.side_set 1`
-//! against `side_set_pin_base(clock)` in [`crate::driver`] keeps the window to one
-//! bit, and [`crate::Hub75Pins16::new`] refuses any clock pin inside the window
-//! other than [`pins::RESERVED`].
+//! The overlap is safe only on that pin. A side-set aimed at another bus pin would
+//! fight every word and win — RP2350 datasheet §11.5.6, *"If a side-set overlaps
+//! with an OUT/SET performed by that state machine on the same cycle, the side-set
+//! takes precedence in the overlapping region"* — so the corruption would be
+//! silent. `.side_set 1` against `side_set_pin_base(clock)` in [`crate::driver`]
+//! keeps the window to one bit, and [`crate::Hub75Pins16::new`] refuses any clock
+//! pin inside the window other than [`pins::RESERVED`].
 //!
 //! # The latch
 //!
@@ -79,10 +73,9 @@ use pio::{Program, RP2040_MAX_PROGRAM_SIZE};
 
 /// A stream program together with the window width it writes.
 ///
-/// The program and the `out pins, N` window are one decision — a program that
-/// shifts fourteen bits into an eight-pin window drives the wrong pins — so they
-/// travel together and the driver reads both from one place rather than keeping
-/// two lists in step.
+/// The program and the `out pins, N` count are one decision: a program that
+/// shifts fourteen bits into an eight-pin window drives the wrong pins. Holding
+/// both here keeps a single source for the pair.
 pub struct Stream {
     program: Program<{ RP2040_MAX_PROGRAM_SIZE }>,
     window: u8,

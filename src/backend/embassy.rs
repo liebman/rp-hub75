@@ -1,11 +1,11 @@
 //! The `embassy-rp` port.
 //!
 //! embassy-rp drives the same PIO block and DMA engine through a different API: a
-//! [`Pio`] handle owns the state machines, a [`Pin`] is made from a GPIO before it
-//! can be configured, and the DMA channel is programmed through the PAC rather
-//! than embassy's `Channel` (which reserves the channel and its interrupt for
-//! embassy's own transfers). Everything named here has a twin in `rphal`, so the
-//! shared driver calls `backend::…` and neither backend leaks into it.
+//! [`Pio`] owns the state machines, a [`Pin`] is made from a GPIO before use, and
+//! the DMA channel is programmed through the PAC rather than embassy's `Channel`
+//! (which reserves the channel and its interrupt for embassy's transfers).
+//! Everything here has a twin in `rphal`, so the shared driver calls `backend::…`
+//! and names neither HAL.
 
 use embassy_rp::Peri;
 use embassy_rp::dma::ChannelInstance;
@@ -406,8 +406,9 @@ pub fn bring_up<P: EmbassyPins>(
     cfg.use_program(&loaded, &[pins.clock_pin()]);
     // Set the OUT window by number: the reserved window pin, where the
     // framebuffer's word holds zero, is not a signal the pin set holds.
-    // SAFETY: only the OUT window is set here, and the state machine has not
-    // started.
+    // SAFETY: the state machine has not started, and the only fields written are
+    // `out_base` and `out_count`, both derived from the checked pin set and the
+    // stream's window width.
     unsafe {
         let mut pin_config = cfg.get_pins();
         pin_config.out_base = base;

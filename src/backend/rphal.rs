@@ -1,11 +1,10 @@
 //! The `rp2040-hal` / `rp235x-hal` port.
 //!
-//! The two `rp-hal` parts share `rp-hal-common` and the same register-block
-//! shape, so one implementation covers both. This module holds everything whose
-//! shape differs between the HALs — the DMA channel accessors, the pin-set types
-//! and their `into_function` conversion, the stream programs, and the PIO
-//! bring-up — behind names the rest of the crate uses with no conditional
-//! compilation of its own. The embassy port names them identically.
+//! The two `rp-hal` parts share `rp-hal-common` and the same register-block shape,
+//! so one implementation covers both. The pieces whose shape differs from
+//! embassy's are here — the DMA accessors, the pin sets and their `into_function`
+//! conversion, and the PIO bring-up — behind names the shared driver uses. The
+//! embassy port names them identically.
 
 use super::BringUp;
 use super::ChannelSetup;
@@ -606,8 +605,7 @@ where
     /// system clock the PIO divider is derived from, the configuration (which
     /// names the interrupt line the application bound
     /// [`on_dma_irq`](crate::on_dma_irq) to), and the first framebuffer to
-    /// display. From here the panel refreshes itself; nothing else needs calling,
-    /// ever.
+    /// display. From here the panel refreshes itself.
     ///
     /// `fb` is taken by exclusive reference, and the first
     /// [`swap`](crate::driver::Hub75::swap) is what hands it back — so the buffer

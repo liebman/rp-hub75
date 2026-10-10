@@ -6,12 +6,13 @@ measurements come from, and the (64×64, 1/32 scan) panel the examples default t
 — not the only target: the pin base, the bus wiring, the 8- or 16-bit bus, and
 the panel geometry are all parameters.
 
-One PIO state machine streams a `hub75-framebuffer` bitplane framebuffer straight
-at the panel, and the CPU does nothing else: one interrupt a frame.
+One PIO state machine streams a `hub75-framebuffer` bitplane framebuffer at the
+panel; the CPU takes one interrupt per frame.
 
 ```rust
 let hub75 = Hub75::new(pio, ch0, ch1, &mut resets, pins, clocks.system_clock.freq(),
-                       Hub75Config::new(pac::Interrupt::DMA_IRQ_1), fb0)?;
+                       Hub75Config::new(pac::Interrupt::DMA_IRQ_1), fb0,
+                       hub75_descriptors!(Fb))?;
 // ch0 streams the panel; ch1 plays the descriptor table.
 
 let mut fb = fb1;                        // fb0 is on the panel now
@@ -23,37 +24,30 @@ loop {
 
 ## How it works
 
-* A framebuffer word *is* the bus: with `hub75-framebuffer`'s `interstate75`
-  layout, bit *n* is pin *n*, so one PIO `out pins, 14` drives the six colour
-  bits, the row address, the latch and the output enable — no conversion pass
-  ([`programs`](src/backend/programs.rs)). The clock is the exception: the PIO
-  generates it with a side-set, so it is the one pin specified apart from the
-  window (`Hub75Pins16::new`'s last argument) and the one word bit
-  (`pins::RESERVED`) that carries no signal. The **8-bit latched** bus is the same
-  idea at half the width: one `out pins, 8` drives two sub-pixels' colour, the
-  latch and the output enable (`Hub75Pins8`), the row address rides in trailing
-  address bytes, and — having no reserved bit — the clock is always a pin outside
-  the window.
-* **Two channels and no CPU between frames.** The control channel plays a
-  descriptor table — one entry per repetition of every segment, then a terminator
-  — into the data channel's `AL3` register block, and the data channel chains back
-  to it on completion ([`descriptor`](src/descriptor.rs)). The chain re-arms itself
-  as often as the frame needs, so a `reps` count costs a table entry rather than an
-  interrupt, and there is no ring size, alignment rule or power-of-two rule
-  anywhere. Nothing in the driver knows what a plane or a row is, so plane-major,
-  row-major, threshold and remapped framebuffers all work — the layout only changes
-  the cost. The table is **the caller's storage**: `hub75_descriptors!(Fb)` sizes a
-  `static` to the frame's own length and the driver keeps only a pointer.
-* **One interrupt a frame.** It is the table's terminator, at the boundary, and it
-  depends neither on the layout nor on where the linker put the framebuffer. A
-  blocked interrupt delays a frame boundary; it cannot corrupt the picture.
-* A framebuffer swap is **one delta**: the incoming buffer differs from the one on
-  the panel by a single number, and the interrupt adds it to the table's addresses
-  at the boundary, on the frames that swap and no others. No tearing, no memcpy,
-  and `swap().wait()` hands the outgoing buffer back.
-* Six planes is 63 panel scans a refresh, which is why the examples draw at six;
-  eight flickers at this clock. The depth is the framebuffer's `PLANES`, not a
-  driver constant. The crate docs have the geometry-to-framebuffer mapping.
+* Framebuffer bit *n* is window pin *n* (`hub75-framebuffer`'s `interstate75`
+  layout), so one PIO `out pins, 14` drives the six colour bits, the row address,
+  the latch and the output enable — no conversion pass
+  ([`programs`](src/backend/programs.rs)). The clock is a side-set: the one pin
+  passed apart from the window (`Hub75Pins16::new`'s last argument), wired to the
+  word bit `pins::RESERVED` or to a pin outside the window. The **8-bit latched**
+  bus is `out pins, 8` (`Hub75Pins8`): two sub-pixels' colour, the latch and the
+  output enable, the row address in trailing `Address` bytes, and — having no
+  reserved bit — the clock always outside the window.
+* The control channel plays a descriptor table into the data channel's `AL3`
+  register block; the data channel chains back on completion
+  ([`descriptor`](src/descriptor.rs)). One entry per BCM `reps`, then a
+  terminator. No ring size, alignment rule or power-of-two rule. The driver knows
+  no planes or rows, so plane-major, row-major, threshold and remapped
+  framebuffers all work; the layout only changes the cost. The table is the
+  caller's storage: `hub75_descriptors!(Fb)` sizes a `static` to the frame length,
+  and the driver keeps a pointer.
+* The table terminator is the only interrupt, once a frame, at the boundary. It
+  depends on neither the layout nor the framebuffer's link address. A blocked
+  interrupt delays the boundary; it cannot corrupt the picture.
+* A swap is one address delta, added to the table at that boundary. No tearing, no
+  memcpy; `swap().wait()` returns the outgoing buffer.
+* Six planes is 63 scans per refresh, which is why the examples draw at six; eight
+  flickers at the example clock. Depth is the framebuffer's `PLANES`.
 
 ## Cargo features
 
@@ -100,7 +94,7 @@ named — its types arrive through `rp_hub75::framebuffer`.
 
 | feature | effect |
 |---|---|
-| `invert-clock` | inverts the clock pin's output in the GPIO block (`IO_BANK0` `GPIOx` `CTRL` `OUTOVER`) for a panel that takes a column on the clock's falling edge. The clock is the one signal the PIO generates rather than copies out of a word, so its polarity is the pin's and one program runs either way. Builds for both chips; measured on the RP2350, untested on the RP2040. |
+| `invert-clock` | inverts the clock pin's output in the GPIO block (`IO_BANK0` `GPIOx` `CTRL` `OUTOVER`) for a panel that takes a column on the clock's falling edge. The clock is the one signal the PIO generates rather than copies out of a word, so its polarity is the pin's and one program runs either way. |
 | `invert-oe` | forwards to `hub75-framebuffer/invert-oe` for a panel whose output enable is active-high. The crate's words are the only place that polarity lives, so there is one switch. |
 
 The rest forward to `hub75-framebuffer` and change the words the driver streams —
@@ -122,7 +116,7 @@ example build selects a panel's tuning, e.g.
 
 | feature | effect |
 |---|---|
-| `20mhz` | the examples' panel clock: 10 MHz without it, 20 MHz with it, as the esp-hub75 examples do. The divider is an integer rounded *up*, so 20 MHz here lands on 18.75 MHz — the clock the examples' rates were measured at |
+| `20mhz` | the examples' panel clock: 10 MHz without it, 20 MHz with it, as the esp-hub75 examples do. The divider is an integer rounded *up*, so 20 MHz here lands on 18.75 MHz |
 | (the tunings) | each forwards to the library, so an example build selects a panel's tuning |
 
 ## Examples
@@ -136,14 +130,14 @@ is wired for it). `build-all.sh` and `clippy-all.sh` walk the directory.
 | `gradient` | the display from `esp-hub75`'s gradient demo: three colour ramps (red, green, blue, one light level per column) and a status block whose labels are left-justified while the values are right-justified — refresh rate, render time, the descriptor table's runs a frame (`runs_per_refresh()`, 32 here), and a counter ticking ten times a second, which is also the heartbeat |
 | `telemetry` | the same engine and panel pattern, with `wait_for_done().await` and frames/interrupts/swaps once a second over `defmt` → RTT (the digit on the panel is the loop’s frame count). `irqs` should track the frame count one for one: one interrupt a frame is the whole engine |
 | `ghost` | a ghosting / bleed probe: four phases — a blinking dot, a raster, a diagonal and a sweeping bar — that make row bleed (adjacent, and across the frame boundary) and column bleed visible, and name their direction |
-| `starfield` | the view out of a spaceship's window: stars live in a depth field ahead of the camera, project out from the center as their depth falls, and are re-spawned on the far plane when they pass the near plane or leave the panel. Each star takes a tint from a small palette (blue-white through white and yellow to red) and is faded by depth, so distant stars are dim and near ones bright. Integer projection (no FPU) and an inline `xorshift32` for placement — no new dependency, and the flight speed is per second, derived from `refresh_hz()`, so the `20mhz` feature does not change it |
+| `starfield` | depth-field stars: integer projection, an inline `xorshift32` for placement, tinted by depth. Flight speed is per second, derived from `refresh_hz()`, so `20mhz` does not change the motion |
 | `starfield-embassy` | `starfield` on the embassy-rp backend: the same projection, on `#[embassy_executor::main]` with `wait_for_done().await`. Built and run with `cd examples/starfield-embassy && cargo run-rp2350` |
 | `ladder` | the read-back ladder: five patterns, two seconds each, whose *failure modes* name a fault rather than just looking wrong — one row pair lit means the stream stopped, columns at x = 1, 2, 3 mean the panel latches on `STB`'s rising edge, the diagonal shifted means the address lines are a row out. A regression tool; `gradient` and `ghost` are the same questions at the eye's resolution |
 | `gradient-embassy` | `gradient` on the embassy-rp backend: `#[embassy_executor::main]`, a `bind_interrupts!` handler calling `on_dma_irq`, and `wait_for_done().await`. Built and run with `cd examples/gradient-embassy && cargo run-rp2350` (the `embassy` backend) |
 | `gradient-latched` | the **8-bit latched** bus: the `gradient` display on `bitplane::latched` and `Hub75Pins8`, drawn through an external latch circuit on a non-zero window base (GP2–GP9, clock GP10). Needs the breadboard latch, not just the panel header |
 
 Every example here drives the panel through [`Hub75`](src/driver.rs), which is the
-only API this crate offers. What the earlier engines taught is in the git history.
+only API this crate offers.
 
 Flashing and running, with the CMSIS-DAP probe attached:
 
@@ -155,9 +149,9 @@ Without a probe, flash over the USB-C bootloader instead (hold BOOT, tap RESET,
 then `picotool load -u -v -x -t elf <elf>`).
 
 There is no UART to log to — GP0/GP1 are panel data — so the log is `defmt` over
-RTT, back up the probe's wire. The old path was USB CDC, which needed no probe but
-could stall the display loop on a host that stopped reading; RTT drops a frame
-instead, and that is the one thing a log must never do to a panel.
+RTT, back up the probe's wire. `defmt-rtt` keeps `disable-blocking-mode`:
+probe-rs puts RTT in blocking mode, so a host that stops reading would otherwise
+block a log call, and a blocked display loop is a frozen panel.
 
 The examples own the log: `defmt`, `defmt-rtt` and `panic-probe` are each example
 package's own dependencies and a log line is a plain `defmt::info!`. The library
@@ -166,24 +160,6 @@ logs nothing, so its numbers reach the log through its accessors (`divider`,
 startup line reads them. Neither the hal's nor the framebuffer's own defmt feature
 can be turned on — the hal wants `defmt <0.4`, the framebuffer `1.0`, and two majors
 cannot share an image.
-
-## Status
-
-The engine is the descriptor one, and it is flashed: 32 runs a refresh played by a
-control channel, **one interrupt a frame**, with `irqs` == `swap_waited` == `frames`
-and `gradient` and `ghost` looking right — straight colour ramps and no row or
-column bleed. The ladder has been read off the panel — all five rungs as they
-should be, which closes the ladder's read-back and settles the latch edge (this
-panel takes the row on `STB`'s falling edge) and the R0/G0/B0 colour order. What is
-still unverified is the panel clock ceiling: the ladder at a faster divider, and an
-analyser for the number.
-
-The **8-bit latched** path and the **RP2040** build are new and compiled — the
-`gradient-latched` example links for both `thumbv6m-none-eabi` and
-`thumbv8m.main-none-eabihf`, and the host tests cover the 8-bit word layout — but
-they are **not yet flashed**: they need the external latch circuit on a breadboard,
-and no RP2040 board has driven a panel here; their numbers are unrecorded until
-they are.
 
 ## Layout
 

@@ -59,8 +59,10 @@
 //!
 //! ## Logging
 //!
-//! The bus occupies GP0–GP13 on the reference board, so GP0/GP1 (the default UART0
-//! TX/RX) are not available for logging: use USB CDC, or SWD/RTT with a probe.
+//! The bus occupies GP0–GP13 on the reference board, so GP0/GP1 (the default
+//! UART0 TX/RX) are unusable for logging. Log with `defmt` over RTT through a
+//! probe; USB CDC is the alternative, but it can stall the display loop when the
+//! host stops reading.
 
 /// Red data, top half of the panel. Word bit 0.
 pub const R0: u8 = 0;
@@ -249,7 +251,7 @@ pub mod latched {
     // -----------------------------------------------------------------------
 
     // `hub75-framebuffer`'s `bitplane::latched` layout decides where a signal's
-    // word bit lives. This module names the top half's colour `R1/G1/B1` and the
+    // word bit lives. The constants name the top half's colour `R1/G1/B1` and the
     // bottom half's `R2/G2/B2`, which is the reverse of `LATCHED_PINMAP`'s
     // `color0_*` (upper half) and `color1_*` (lower half); pinning the two
     // together here keeps that cross-over from being read the wrong way.

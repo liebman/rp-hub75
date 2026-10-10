@@ -1,9 +1,7 @@
 //! The read-back ladder: five patterns, each one naming a fault.
 //!
-//! The rungs, re-expressed through [`Hub75`] and kept as a *regression* tool
-//! rather than a bring-up one. `gradient` and `ghost` are the
-//! eye's version of the same questions; this is the version whose failure modes
-//! are specific.
+//! A regression tool. `gradient` and `ghost` ask the same questions at the eye's
+//! resolution; these rungs have specific failure modes.
 //!
 //! | rung | what it lights | a wrong picture means |
 //! |---|---|---|
@@ -13,17 +11,17 @@
 //! | **D** | full-height columns at x = 0, 1, 2 in red, green and blue | columns at x = 1, 2, 3 → **the panel latches on `STB`'s rising edge**, so the last column is captured early; `tail-closes-latch` is the crate's answer. At the *right* edge → the shift direction is reversed; colours out of order → the R0/G0/B0 order |
 //! | **E** | the diagonal: one pixel per row, one column to the right per row, white above the join and blue below | a kink or a column shift → a real fault; the lower arm above the join → the halves are crossed; every row shifted a whole row → the address lines are a row out |
 //!
-//! Two seconds a rung, looping, and the log says which one is up: the patterns
-//! carry no label of their own, because rung A has to be uniformly white.
+//! Two seconds a rung, looping. The log names the current rung; the patterns
+//! carry no label, because rung A must be uniformly white.
 //!
-//! The ladder is also the clock question. It takes the same `20mhz` feature as the
-//! other examples; rebuild it with a faster divider — a `/3` divider is 25 MHz on
-//! the examples' 150 MHz system clock — and the rung that goes wrong first is the
-//! ribbon's ceiling, not the driver's.
+//! The ladder is also the clock test. It takes the same `20mhz` feature as the
+//! other examples; rebuild with a faster divider — `/3` is 25 MHz on the examples'
+//! 150 MHz system clock — and the first rung to fail is the ribbon's ceiling, not
+//! the driver's.
 //!
 //! ```text
 //! # probe attached:
-//! cargo run-rp2350 --example ladder
+//! cd examples/ladder && cargo run-rp2350
 //! ```
 #![no_std]
 #![no_main]

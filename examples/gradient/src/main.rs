@@ -1,26 +1,18 @@
 //! The `esp-hub75` gradient demo, on the driver.
 //!
-//! The same display as `../esp-hub75/examples/gradient`: three horizontal colour
-//! ramps across the top of the panel — red, then green, then blue, one step per
-//! column — and four status lines below them showing the refresh rate, how long
-//! the last frame took to draw, the descriptor table's runs a frame, and a counter
-//! that ticks ten times a second.
+//! Three column ramps across the top of the panel — red, green, blue, one light
+//! level per column — and four status lines below: refresh rate, last draw time,
+//! `runs_per_refresh()` (32 runs for this layout, one entry per repetition; the
+//! table terminator is the only interrupt), and a counter at 10 Hz.
 //!
-//! The status block's third line is the descriptor table's length,
-//! `runs_per_refresh()` — 32 runs for this frame, one entry per repetition — and
-//! it is the layout's number, not the panel's. One interrupt plays them all: the
-//! table's terminator, once a frame.
-//!
-//! Labels are left-justified and values right-justified, as two pieces of text on
-//! one line. `FONT_5X7` advances five pixels per character, so esp's single padded
-//! `"Refresh:  145"` is 65 pixels and loses the last column of its last digit on a
-//! 64-pixel panel. Split in two, the label's width no longer constrains the
-//! value's: the longest line here is `"Simple:"` plus five digits, 60 pixels, with
-//! a gap between them.
+//! Labels are left-justified and values right-justified. `FONT_5X7` advances five
+//! pixels per character, so a single padded `"Refresh:  145"` is 65 pixels and
+//! overflows a 64-pixel panel. Two pieces of text on one line keep the label's
+//! width off the value's.
 //!
 //! ```text
 //! # board in BOOTSEL mode:
-//! cargo run-rp2350 --example gradient
+//! cd examples/gradient && cargo run-rp2350
 //! ```
 #![no_std]
 #![no_main]

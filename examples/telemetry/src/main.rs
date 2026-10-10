@@ -1,28 +1,23 @@
-//! Double buffering, the engine interrupt, and telemetry over RTT.
+//! Double buffering, the terminator interrupt, and telemetry over RTT.
 //!
-//! The same driver as `gradient`, with the two things a real application wants
-//! on top:
+//! Two additions over `gradient`:
 //!
-//! * **The interrupt.** One per frame, and it is the only one: the control
-//!   channel plays the descriptor table and the data channel chains back to it,
-//!   so the handler runs at the terminator — to apply a swap and restart the
-//!   chain — and nowhere else. `IRQ_COUNT` counts its entries, so it should track
-//!   the frame count one for one.
-//! * **Telemetry** over RTT, because GP0/GP1 are panel data and there is no UART:
-//!   frames, interrupts and swaps once a second, through `defmt` to the debug
-//!   probe. The startup line reads the driver's own numbers — divider, panel
-//!   clock, refresh rate and runs a refresh — so one `probe-rs run` shows the
-//!   configuration and the counters together.
+//! * The terminator interrupt. It runs once per frame, after the control channel
+//!   has stopped, to apply a swap and restart the chain. `IRQ_COUNT` counts its
+//!   entries and should track the frame count one for one.
+//! * Telemetry over RTT, because GP0/GP1 are panel data and there is no UART:
+//!   frames, interrupts and swaps once a second through `defmt`. The startup line
+//!   reads the driver's own numbers — divider, panel clock, refresh rate, runs a
+//!   refresh — so one `probe-rs run` shows configuration and counters together.
 //!
-//! The panel shows a static *linear* ramp — equal light per column, no gamma, so
-//! a wrong BCM weight kinks the line — with the loop's frame count on top, and
-//! that display is the point: it needs no host to spot a stall. The digit is
-//! blurred by the frame rate, so a digit that stops moving while the ramp stays put
-//! means the *loop* has stopped even though the panel is still refreshing.
+//! The panel shows a linear ramp (equal light per column, no gamma, so a wrong BCM
+//! weight kinks the line) with the loop's frame count on top. A digit that stops
+//! moving while the ramp holds still means the loop stalled; the panel is still
+//! refreshing.
 //!
 //! ```text
 //! # probe attached:
-//! cargo run-rp2350 --example telemetry
+//! cd examples/telemetry && cargo run-rp2350
 //! ```
 #![no_std]
 #![no_main]
@@ -133,8 +128,8 @@ extern "C" fn DMA_IRQ_1() {
 ///
 /// The waker only has to exist — parking the caller is what it is for, not
 /// scheduling, and the interrupt is what ends the wait — so its vtable does
-/// nothing and the loop simply re-polls. That is enough for `wait_for_done`,
-/// which reads a flag the interrupt sets.
+/// nothing and the loop re-polls. That is enough for `wait_for_done`, which reads
+/// a flag the interrupt sets.
 fn block_on<F: Future>(future: F) -> F::Output {
     static DUMMY: () = ();
     const VTABLE: RawWakerVTable = RawWakerVTable::new(|_| raw_waker(), |_| {}, |_| {}, |_| {});

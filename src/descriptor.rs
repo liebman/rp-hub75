@@ -1,40 +1,36 @@
-//! The engine: the frame as a DMA descriptor table, played by a second channel.
+//! The descriptor table one refresh is played from.
 //!
-//! A **control** DMA channel writes each two-word entry into the data channel's
-//! `AL3` register block; the block's last word (`AL3_READ_ADDR_TRIG`) triggers the
-//! run it describes, and the data channel chains back to the control channel when
-//! the run completes. The hand-off diagram is in [`crate::driver`].
+//! A control DMA channel writes each two-word entry into the data channel's
+//! `AL3` register block; the block's last word (`AL3_READ_ADDR_TRIG`) triggers
+//! the run it describes, and the data channel chains back to the control channel
+//! when the run completes. [`crate::driver`] has the hand-off diagram.
 //!
 //! A descriptor is exactly two words ([`Descriptor`]), and the data channel's
-//! `CTRL` is written once at startup: nothing about a run is configurable per run,
-//! so a segment asked for `reps` times is materialised `reps` times. There is no
-//! ring size, alignment rule or power-of-two rule anywhere.
+//! `CTRL` is written once at startup, so a segment asked for `reps` times
+//! becomes `reps` entries. There is no ring size, alignment rule or
+//! power-of-two rule.
 //!
 //! # One interrupt per frame
 //!
-//! The table ends with a terminator: a [`Descriptor`] whose two words are zero.
-//! Zero is not a trigger, so it starts nothing, and the data channel runs with
-//! `IRQ_QUIET` set — RP2350 datasheet §12.6, *"an IRQ is raised when NULL is
-//! written to a trigger register, indicating the end of a control block chain"*.
-//! One refresh is therefore one interrupt, raised once the control channel has
-//! stopped at the terminator.
+//! The table ends with a [`Descriptor`] whose two words are zero. Zero is not a
+//! trigger, so it starts nothing, and the data channel runs with `IRQ_QUIET` set
+//! — RP2350 datasheet §12.6, *"an IRQ is raised when NULL is written to a trigger
+//! register, indicating the end of a control block chain"*. One refresh is one
+//! interrupt, raised once the control channel has stopped at the terminator.
 //!
-//! # The table is a frame, materialised
+//! # The table is the caller's
 //!
-//! One refresh is the sum of `reps` runs, so the table holds that many descriptors
-//! plus the terminator, and [`descriptor_count`] sizes it at compile time without a
-//! framebuffer instance. The storage is the caller's, made by
-//! [`hub75_descriptors!`](crate::hub75_descriptors): the driver keeps a pointer and
-//! nothing larger. The count is the layout's cost, not the panel's: 32 runs for a
-//! six-plane plane-major frame at any geometry, `32 × NROWS` for row-major.
+//! [`descriptor_count`] sizes it at compile time from the layout, without a
+//! framebuffer instance: 32 runs plus the terminator for a six-plane plane-major
+//! frame at any geometry, `32 × NROWS` for row-major. The storage is the
+//! caller's, made by [`hub75_descriptors!`](crate::hub75_descriptors); the driver
+//! keeps a pointer.
 //!
-//! # The swap is a delta, applied in place
-//!
-//! A descriptor holds an absolute address, because the DMA writes each word
-//! straight into the data channel's `READ_ADDR` and nothing adds a base. Both
-//! framebuffers have the same layout, so a swap is one number: the interrupt adds
-//! it to every run's address through [`patch`] before restarting the chain. The
-//! terminator is never patched.
+//! A swap is one delta. A descriptor holds an absolute address, because the DMA
+//! writes each word straight into the data channel's `READ_ADDR`. Both
+//! framebuffers share a layout, so the interrupt adds the base delta to every
+//! run's address through [`patch`] before restarting the chain. The terminator is
+//! never patched.
 
 use core::marker::PhantomData;
 use hub75_framebuffer::BcmLenReps;
@@ -43,12 +39,10 @@ use hub75_framebuffer::bcm_rep_count;
 
 /// A framebuffer word: its width in bytes, and the DMA transfer size it takes.
 ///
-/// The word width is a property of the *framebuffer* — `u16` for the
-/// direct-drive layouts whose word is the whole bus, `u8` for the latched ones —
-/// and it decides two things that must agree: how many bytes are one word (the
-/// descriptor's `TRANS_COUNT` counts words, not bytes), and the data channel's
-/// `DATA_SIZE`. Implementing this trait for a word type is what lets the engine
-/// be written once for every layout.
+/// The width is the framebuffer's: `u16` for the direct-drive layouts, whose
+/// word is the whole bus, and `u8` for the latched ones. It fixes two values that
+/// must agree: the descriptor's `TRANS_COUNT` counts words, not bytes, and the
+/// data channel's `DATA_SIZE` is this width's `log2`.
 pub trait BusWord {
     /// Bytes in one word.
     const BYTES: usize;
@@ -67,7 +61,10 @@ impl BusWord for u16 {
     const DATA_SIZE_LOG2: u8 = 1;
 }
 
-/// Largest `TRANS_COUNT` RP2350 can hold: 28 bits, the top four being `MODE`.
+/// Largest `TRANS_COUNT` the engine programs: 28 bits.
+///
+/// The RP2350 uses the top four bits of the field as `MODE`. The RP2040 field is
+/// 32 bits; the engine caps at the tighter limit so one constant serves both.
 pub const MAX_TRANSFER_WORDS: u32 = (1 << 28) - 1;
 
 /// Descriptors a frame of framebuffer type `FB` needs: its runs, and the
