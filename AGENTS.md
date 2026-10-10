@@ -6,9 +6,10 @@ change must not break, and the commands that verify it.
 
 ## Invariants
 
-* A framebuffer word **is** the bus. With `hub75-framebuffer`'s `interstate75` layout,
-  bit *n* is pin *n*, so one `out pins, 14` drives the six colour bits, the row
-  address, the latch and the output enable. See `src/backend/programs.rs`.
+* A framebuffer word carries the whole bus: with `hub75-framebuffer`'s
+  `interstate75` layout, bit *n* is pin *n*, so one `out pins, 14` drives the six
+  colour bits, the row address, the latch and the output enable. See
+  `src/backend/programs.rs`.
 * The sequence **is** the frame. The driver plays the framebuffer's own BCM sequence
   from a descriptor table — one entry per run, then a terminator — and knows nothing
   about planes, rows or their lengths. See `src/descriptor.rs`.

@@ -161,10 +161,10 @@ pub(crate) fn hub75_stream8() -> Stream {
 
 /// The stream program a bus word width selects.
 ///
-/// The word is the bus, so its width picks the program and the window: one byte
-/// is the eight-pin latched bus ([`hub75_stream8`]), two bytes the fourteen-pin
-/// direct-drive one ([`hub75_stream16`]). Deriving it from [`BusWord::BYTES`]
-/// keeps `out pins, N` in step with the word.
+/// The word width picks the program and the window: one byte is the eight-pin
+/// latched bus ([`hub75_stream8`]), two bytes the fourteen-pin direct-drive one
+/// ([`hub75_stream16`]). Deriving it from [`BusWord::BYTES`] keeps `out pins, N`
+/// in step with the word.
 pub(crate) fn stream_for<W: BusWord>() -> Stream {
     match W::BYTES {
         1 => hub75_stream8(),
