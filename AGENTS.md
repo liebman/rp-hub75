@@ -80,13 +80,17 @@ lines: each one is shaped around the bare-metal target.
 | `./test-all.sh` | Host unit tests through `cargo test-rp2350` (the alias names the backend and chip features) with `--target` pinned to the host triple. One pass: the polarity features do not change what a test observes. |
 | `./build-all.sh` | The library in the four polarity combinations via `cargo build-rp2350`, then each example package with `(cd examples/<name> && cargo build-rp2350)` and the RP2040 example with `cargo build-rp2040`. The library alias names `.cargo/config-rp2350.toml` and `rphal,rp2350`; no feature is a default. |
 | `./clippy-all.sh` | `cargo clippy-rp2350 --lib` on the library — not `--all-targets`: the test harness needs `core::test`, which does not exist for this target — and `cargo clippy-rp2350` in each example package. |
-| `./fmt-all.sh` | `cargo fmt` in the root and in each example package (they are separate crates), then `--check`. Do not add a `rustfmt.toml` without agreeing on it. |
+| `./fmt-all.sh` | `cargo fmt` in the root and in each example package (they are separate crates), then `--check`. `./fmt-all.sh --check` is the CI pass: it reports and does not write. Do not add a `rustfmt.toml` without agreeing on it. |
 | `cd examples/gradient && cargo run-rp2350` | Builds, flashes and runs over the debug probe (`probe-rs run --chip RP235x`), and streams the `defmt` log back on the same terminal. Without a probe, flash over the USB-C bootloader instead: hold BOOT, tap RESET, `picotool load -u -v -x -t elf <elf>`. |
 | `cd examples/gradient-latched && cargo build-rp2040` | The same, for the RP2040: the example's alias names `.cargo/config-rp2040.toml` (target `thumbv6m-none-eabi`, `probe-rs run --chip RP2040`) and its `rp2040` feature; no feature is a default. Every example defines `build-rp2040`/`run-rp2040`. |
 | `cargo build-embassy` (root) / `cd examples/gradient-embassy && cargo run-rp2350` | The embassy-rp backend: the root alias builds the library against `embassy-rp`; the example package builds and flashes the embassy example through its own alias. |
 | `cargo doc-rp2350` | Checks that the documentation builds (the alias names the board and the `--no-deps` flag). A `rustdoc` warning is a bug — nothing denies them here, and there is no `cargo xtask` in this crate. |
 
-There is no CI and no `.github/`. Whatever a change claims is verified, you ran.
+CI is `.github/workflows/ci.yml`: five jobs on `ubuntu-latest`, one each for
+`./fmt-all.sh --check`, `./test-all.sh`, `./clippy-all.sh`, `./build-all.sh` and
+`cargo doc-rp2350`, run on every pull request and push to `main`. It hosts no
+probe, so it never flashes or runs a binary; a hardware claim beyond the checks
+is still one you made by running the command.
 
 ## Tests
 

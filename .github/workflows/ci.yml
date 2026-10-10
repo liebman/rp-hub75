@@ -1,0 +1,79 @@
+# Continuous integration: the checks a change must pass before it lands.
+#
+# The jobs run the repository's own scripts rather than restating their cargo
+# lines, so CI and a developer's terminal run the same commands. There is no
+# probe on a hosted runner, so no job flashes or runs a binary: the passes are
+# the host tests, the lints, the formatting check, the target builds and the
+# documentation build. `cargo doc-rp2350` is the alias in `.cargo/config.toml`.
+#
+# The toolchain is pinned by `rust-toolchain.toml` (channel `stable`, edition
+# 2024 needs 1.85 or newer). The targets and components that file names are set
+# on the action too, so a runner whose stable is already present still gains
+# them before the first cargo invocation.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+          targets: thumbv8m.main-none-eabihf,thumbv6m-none-eabi
+      - run: ./fmt-all.sh --check
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+          targets: thumbv8m.main-none-eabihf,thumbv6m-none-eabi
+      - run: ./test-all.sh
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+          targets: thumbv8m.main-none-eabihf,thumbv6m-none-eabi
+      - run: ./clippy-all.sh
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+          targets: thumbv8m.main-none-eabihf,thumbv6m-none-eabi
+      - run: ./build-all.sh
+
+  doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+          targets: thumbv8m.main-none-eabihf,thumbv6m-none-eabi
+      - run: cargo doc-rp2350
