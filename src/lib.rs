@@ -1,60 +1,35 @@
-//! # rp-hub75
+//! # RP-HUB75
 //!
 //! A `no-std` driver for HUB75-style LED matrix panels on the RP2040 and
 //! RP2350.
 //!
-//! One PIO state machine streams the framebuffer; two DMA channels play its
-//! Binary Code Modulation (BCM) sequence, and the CPU takes one interrupt per
-//! frame. Pick the backend with a single target feature:
+//! The panel is refreshed over DMA with almost no CPU involvement. One PIO
+//! state machine streams the framebuffer and two DMA channels play its Binary
+//! Code Modulation (BCM) sequence, so the CPU takes one interrupt per frame.
+//! Pick the backend with a single target feature:
 //!
-//! - `rphal-rp2350`: the `rp-hal` backend on the RP2350 (`rp235x-hal`)
-//! - `rphal-rp2040`: the `rp-hal` backend on the RP2040 (`rp2040-hal`)
-//! - `embassy-rp2350`: the `embassy-rp` backend on the RP2350
-//! - `embassy-rp2040`: the `embassy-rp` backend on the RP2040
+//! - **`rphal-rp2350`**: the `rp-hal` backend and the RP2350 (`rp235x-hal`)
+//! - **`rphal-rp2040`**: the `rp-hal` backend and the RP2040 (`rp2040-hal`)
+//! - **`embassy-rp2350`**: the `embassy-rp` backend and the RP2350
+//! - **`embassy-rp2040`**: the `embassy-rp` backend and the RP2040
 //!
-//! Exactly one is required and none is a default. Both chips share the same PIO
-//! and DMA register blocks, so one source builds for `thumbv6m-none-eabi` and
-//! `thumbv8m.main-none-eabihf`. The selected HAL is re-exported as [`hal`].
-//!
-//! The framebuffers work with `embedded-graphics`, so you can draw shapes, text
-//! and images on the display, and they go to the PIO as-is: there is no
-//! per-frame conversion step.
+//! Exactly one is required, and none is a default.
 //!
 //! ## Framebuffers
 //!
-//! Use the **bitplane** framebuffers from the [`framebuffer`] crate
-//! (`hub75-framebuffer`). The framebuffer type fixes the bus:
+//! Use the **bitplane** framebuffers from the `hub75-framebuffer` crate.
+//! They come in two variants: direct-drive (16-bit, no external latch) and
+//! latched (8-bit, needs an external address-latch circuit). Both can be
+//! handed to the PIO as-is; there is no extra formatting step.
 //!
-//! | bus | framebuffer | pins | program |
-//! |---|---|---|---|
-//! | 16-bit direct drive | [`framebuffer::bitplane::plain`] | [`Hub75Pins16`] | `out pins, 14` |
-//! | 8-bit latched | [`framebuffer::bitplane::latched`] | [`Hub75Pins8`] | `out pins, 8` |
-//!
-//! The direct-drive bus carries the row address in the word. The latched bus
-//! needs an external address latch, and its row address rides apart from the
-//! word, in trailing address bytes. A [`Hub75`] requires the pin set's `Word` to
-//! equal the framebuffer's, so a mismatched pair is a compile error.
-//!
-//! The type also fixes the geometry. `NROWS` is
-//! [`compute_rows`](framebuffer::compute_rows) of the panel height, `COLS` its
-//! width times the panels chained across, and `PLANES` the BCM depth:
-//!
-//! | panel | framebuffer |
-//! |---|---|
-//! | 64×64, 1/32 | `DmaFrameBuffer<compute_rows(64), 64, 6>` |
-//! | 64×32, 1/16 | `DmaFrameBuffer<compute_rows(32), 64, 6>` |
-//! | two 64×64 chained | `DmaFrameBuffer<compute_rows(64), 128, 6>` |
-//!
-//! The library holds no panel constants; the application states its panel and
-//! derives the type from it. The window's wiring is [`Hub75Pins16::new`]'s
-//! business: it takes the thirteen signals in bus order plus the clock, derives
-//! the base from the lowest pin, and checks each signal against
-//! [`pins::LAYOUT`], so a wiring mistake stops startup.
+//! Bitplane framebuffers (`framebuffer::bitplane::plain::DmaFrameBuffer` /
+//! `framebuffer::bitplane::latched::DmaFrameBuffer`) store only one bit per
+//! pixel per plane. The driver assembles the BCM output on the fly with DMA
+//! descriptors, so RAM use stays low without losing visual quality.
 //!
 //! ## Usage
 //!
-//! The application owns the DMA vector, draws into whichever buffer is off the
-//! panel, and swaps at a frame boundary:
+//! Example for the RP2350 with the `rp-hal` backend:
 //!
 //! ```rust,ignore
 //! #![no_std]
@@ -165,37 +140,39 @@
 //! }
 //! ```
 //!
-//! `swap` arms the switch and returns once the interrupt has applied it at a
-//! frame boundary; [`Hub75Swap::wait`] then hands the outgoing buffer back. On an
-//! executor, [`Hub75Swap::wait_for_done`] parks the caller instead of spinning,
-//! then `wait` reclaims the buffer. [`driver`] has the channels and the
-//! interrupt, [`descriptor`] the table, and [`backend`] the PIO program and pin
-//! layout.
-//!
 //! ## Crate Features
 //!
-//! Exactly one target feature names the backend and the chip together:
-//!
-//! - `rphal-rp2350` (the RP2350) / `rphal-rp2040` (the RP2040): the `rp-hal`
-//!   backend, against `rp235x-hal` / `rp2040-hal`.
-//! - `embassy-rp2350` / `embassy-rp2040`: the `embassy-rp` backend.
-//!
-//! The library's tuning features:
-//!
-//! - `invert-clock`: inverts the clock pin's output in the GPIO block for a
-//!   panel that takes a column on the clock's falling edge.
-//! - `invert-oe`: forwards to `hub75-framebuffer/invert-oe` for a panel whose
+//! - `rphal-rp2350`: Enable the `rp-hal` backend for the RP2350 (`rp235x-hal`).
+//! - `rphal-rp2040`: Enable the `rp-hal` backend for the RP2040 (`rp2040-hal`).
+//! - `embassy-rp2350`: Enable the `embassy-rp` backend for the RP2350.
+//! - `embassy-rp2040`: Enable the `embassy-rp` backend for the RP2040.
+//! - `invert-clock`: Invert the clock signal by enabling the GPIO output
+//!   inverter on the clock pin. The default drives data that changes on the
+//!   falling edge of the clock so that it is stable when the panel latches on the
+//!   rising edge; enable this if the panel requires the opposite polarity.
+//! - `invert-oe`: Forwards to the `hub75-framebuffer` crate, inverting the
+//!   output-enable (OE) signal in the generated data stream, for a panel whose
 //!   output enable is active-high.
-//! - `skip-black-pixels`, `tail-closes-latch`, `lead-blank-1` through
-//!   `lead-blank-32`, `trail-blank-1` through `trail-blank-32`,
-//!   `inter-row-blank-4` through `inter-row-blank-32`, and `reverse-row-order`:
-//!   forward to `hub75-framebuffer` and change the words the driver streams. The
-//!   crate's `Cargo.toml` lists them.
+//! - `skip-black-pixels`: Forwards to the `hub75-framebuffer` crate, enabling an
+//!   optimization that skips writing black pixels to the framebuffer.
+//! - `tail-closes-latch`: Forwards to the `hub75-framebuffer` crate. Appends a
+//!   tail word at the end of each bit-plane that parks the bus with the latch
+//!   closed and the output blanked. Does not apply to latched framebuffers.
+//! - `lead-blank-1/2/4/8/16/32` / `trail-blank-1/2/4/8/16/32`: Forwards to
+//!   `hub75-framebuffer`. Control the number of pixel-clock cycles of blanking
+//!   inserted before and after a row address change. Higher values reduce
+//!   ghosting at the cost of slightly less brightness.
+//! - `inter-row-blank-4/8/16/32`: Forwards to `hub75-framebuffer`. Insert
+//!   additional dead clock cycles at the end of each row, giving slow panels
+//!   more time to finish blanking.
+//! - `reverse-row-order`: Forwards to `hub75-framebuffer`. Stores the rows of the
+//!   framebuffer in reverse scan order so that the stream renders the last panel
+//!   row first and row 0 last.
 //!
 //! ## Safety
 //!
-//! The crate uses `unsafe` to drive the PIO and DMA registers; it exposes a
-//! safe, high-level API.
+//! The crate uses `unsafe` code to interface with hardware peripherals, but it
+//! exposes a safe, high-level API.
 
 #![no_std]
 

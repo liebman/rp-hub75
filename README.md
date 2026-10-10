@@ -1,4 +1,4 @@
-# rp-hub75
+# RP-HUB75
 
 [![Crates.io](https://img.shields.io/crates/v/rp-hub75.svg)](https://crates.io/crates/rp-hub75)
 [![Documentation](https://docs.rs/rp-hub75/badge.svg)](https://docs.rs/rp-hub75)
