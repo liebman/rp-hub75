@@ -23,5 +23,6 @@ rustflags = [
     "-C", "target-cpu=cortex-m0plus",
 ]
 # The debug probe flashes, runs and carries defmt back over RTT:
-# `cargo run-rp2040 --example latched`, with a CMSIS-DAP probe attached.
+# `cd examples/gradient-latched && cargo run-rp2040`, with a CMSIS-DAP probe
+# attached.
 runner = "probe-rs run --chip RP2040"

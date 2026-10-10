@@ -1,16 +1,15 @@
 #!/bin/bash
 set -e
 
-# Clippy the rp-hub75 library and its examples.
+# Clippy the rp-hub75 library and its example packages.
 #
-# `--lib --examples` rather than `--all-targets`: the test harness needs
-# `core::test`, which does not exist for a no_std bare-metal target.
+# The library is linted once per library feature combination, because
+# `invert-clock` and `invert-oe` select library code paths. `--lib` on the
+# library, not `--all-targets`: the test harness needs `core::test`, which does
+# not exist for this target.
 #
-# The `clippy-rp2350` alias names the board's config file and features (no feature
-# is a default). The library is linted once per library feature combination,
-# because `invert-clock` and `invert-oe` select library code paths. The examples
-# name no polarity, so they are linted once — and `20mhz`, the examples' feature,
-# is read through `cfg!`, so both of its arms are linted in that one run.
+# The examples are separate crates under `examples/`, each linted in its own
+# directory through its own `clippy-rp2350` alias.
 for features in "" "invert-clock" "invert-oe" "invert-clock,invert-oe"; do
     if [ -n "$features" ]; then
         extra=(--features "$features")
@@ -24,14 +23,17 @@ for features in "" "invert-clock" "invert-oe" "invert-clock,invert-oe"; do
 done
 
 echo "=========================================="
-echo "Clippy (examples): cargo clippy-rp2350 --examples"
+echo "Clippy (embassy library): cargo clippy-embassy --lib"
 echo "=========================================="
-cargo clippy-rp2350 --examples
+cargo clippy-embassy --lib
 
-echo "=========================================="
-echo "Clippy (embassy): cargo clippy-embassy --lib --examples"
-echo "=========================================="
-cargo clippy-embassy --lib --examples
+# Each example crate, in its own package.
+for dir in examples/*/; do
+    echo "=========================================="
+    echo "Clippy (example): ${dir}cargo clippy-rp2350"
+    echo "=========================================="
+    (cd "$dir" && cargo clippy-rp2350)
+done
 
 echo "=========================================="
 echo "All clippy runs succeeded!"

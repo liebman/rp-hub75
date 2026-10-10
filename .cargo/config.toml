@@ -16,20 +16,23 @@
 # RISC-V (Hazard3) alternative.
 
 [alias]
-# Every alias names its chip config file and its features. No feature is a
-# default, and the config file is what supplies the chip's target, rustflags and
-# probe. Each section lines its options up in columns. The features name a
-# backend and a chip: `rphal` or `embassy`, then `rp2350` or `rp2040`.
+# The library's aliases. The examples are separate packages under `examples/`,
+# each with its own `.cargo/config.toml` and per-chip config files, so a build of
+# one is `cd examples/<name> && cargo run-rp2350` (or the scripts in the root).
+#
+# Each alias names its chip config file and its features. No feature is a default,
+# and the config file is what supplies the chip's target, rustflags and probe. The
+# features name a backend and a chip: `rphal` or `embassy`, then `rp2350` or
+# `rp2040`. A chip build names only what the library uses; the RT vector table, the
+# picotool header, the second-stage bootloader and the critical-section impl are
+# each example package's business.
 
 # The two chips against rp-hal.
 build-rp2350 = "build --config .cargo/config-rp2350.toml --release --features rphal,rp2350"
-run-rp2350   = "run   --config .cargo/config-rp2350.toml --release --features rphal,rp2350"
 build-rp2040 = "build --config .cargo/config-rp2040.toml --release --features rphal,rp2040"
-run-rp2040   = "run   --config .cargo/config-rp2040.toml --release --features rphal,rp2040"
 
 # The embassy-rp backend: the same chips, the `embassy` backend feature.
 build-embassy        = "build  --config .cargo/config-rp2350.toml --release --features embassy,rp2350"
-run-embassy          = "run    --config .cargo/config-rp2350.toml --release --features embassy,rp2350"
 clippy-embassy       = "clippy --config .cargo/config-rp2350.toml --release --features embassy,rp2350"
 doc-embassy          = "doc    --config .cargo/config-rp2350.toml --no-deps --features embassy,rp2350"
 build-embassy-rp2040 = "build  --config .cargo/config-rp2040.toml --release --features embassy,rp2040"
@@ -40,16 +43,3 @@ build-embassy-rp2040 = "build  --config .cargo/config-rp2040.toml --release --fe
 clippy-rp2350 = "clippy --config .cargo/config-rp2350.toml --release --features rphal,rp2350"
 doc-rp2350    = "doc    --config .cargo/config-rp2350.toml --no-deps --features rphal,rp2350"
 test-rp2350   = "test   --config .cargo/config-rp2350.toml --lib     --features rphal,rp2350"
-
-# The examples, each naming its board config and features itself.
-run-gradient         = "run --config .cargo/config-rp2350.toml --release --example gradient  --features rphal,rp2350"
-run-ghost            = "run --config .cargo/config-rp2350.toml --release --example ghost     --features rphal,rp2350"
-run-starfield        = "run --config .cargo/config-rp2350.toml --release --example starfield --features rphal,rp2350"
-run-ladder           = "run --config .cargo/config-rp2350.toml --release --example ladder    --features rphal,rp2350"
-run-latched          = "run --config .cargo/config-rp2350.toml --release --example latched   --features rphal,rp2350"
-run-telemetry        = "run --config .cargo/config-rp2350.toml --release --example telemetry --features rphal,rp2350"
-run-latched-rp2040   = "run --config .cargo/config-rp2040.toml --release --example latched   --features rphal,rp2040"
-run-gradient-embassy = "run --config .cargo/config-rp2350.toml --release --example gradient-embassy --features embassy,rp2350"
-
-[env]
-DEFMT_LOG = "info"

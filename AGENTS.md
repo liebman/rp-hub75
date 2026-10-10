@@ -66,7 +66,7 @@ returns the `programs::Stream` (a program with the window width it writes), so
 The 8-bit window has **no reserved bit**, so its clock is always outside the window;
 `Hub75Pins8::new` refuses a clock inside it, and `pins::latched` is the layout, pinned
 to `hub75-framebuffer::pinmap::LATCHED_PINMAP` at compile time and held to it by its
-own host test. `examples/latched.rs` is the wiring.
+own host test. `examples/gradient-latched/` is the wiring.
 
 ### The target
 
@@ -88,6 +88,29 @@ register block and the same `pio` crate version, so the stream programs are shar
 types — they differ enough (a `Pio` owns the state machines; a DMA channel is a
 `ChannelInstance`) that no one signature fits both. `on_dma_irq` and
 `wait_for_done` are backend- and executor-agnostic.
+
+The backend and chip features enable only what the *library* names. What a
+*binary* needs — the RT vector table and entry point, the picotool header, the
+RP2040's second-stage bootloader and the critical-section implementation — is named
+by each example package under `examples/`, which is its own crate and not a Cargo
+workspace member, so it also carries its own `[profile]` and `[patch]`. A library
+does not supply the critical-section implementation (`critical-section`'s README
+requires this of a library): a consumer supplies its own, and no library feature is
+forced on it.
+
+Cargo has no per-example feature — `required-features` only gates — and a
+dev-dependency reaches *every* example, so one example-only feature set cannot work
+either: each PAC emits a `device.x` vector table under `rt`, and an rp-hal binary
+and an embassy binary cannot share a link. Separate packages are the only
+granularity that gives each binary exactly its own HAL features, which is why the
+examples are crates rather than `[[example]]` targets (the same shape as
+`esp-hub75`).
+
+Each example also forwards every library tuning — `invert-clock`, `invert-oe`,
+`skip-black-pixels`, `tail-closes-latch`, the `lead-blank`/`trail-blank`/
+`inter-row-blank` set and `reverse-row-order` — as a feature of its own, so an
+example build still selects a panel's tuning: `cargo run-rp2350 --features
+invert-oe`. A library consumer names the library features directly.
 
 The RP2040 has two DMA interrupt lines, not four, and no atomic compare-and-swap;
 both are handled in `src/driver.rs` and in `Cargo.toml` (see the `rp2040` notes
@@ -121,12 +144,13 @@ window, the signal order, and the crystal.
 | `src/pins.rs` | the 16-bit HUB75 word layout as data (`pins`) and the 8-bit one (`pins::latched`), the window's bounds, and the compile-time pins and host tests that hold each layout to `hub75-framebuffer` |
 | `.cargo/config-rp2040.toml`, `.cargo/config-rp2350.toml` | the per-chip target, runner, and the `-L` path to the chip's `memory.x`; the chip config is shared by both backends |
 | `memory/rp2040/memory.x`, `memory/rp2350/memory.x` | the linker memory maps, each named `memory.x` so `link.x`'s `INCLUDE memory.x` finds the chip's |
-| `examples/` | `gradient`, `telemetry`, `ghost`, `ladder`, `latched` (rp-hal) and `gradient-embassy` (embassy-rp) — every example goes through `Hub75` |
+| `examples/<name>/` | the example packages (`gradient`, `telemetry`, `ghost`, `starfield`, `ladder`, `gradient-latched`, `gradient-embassy`, `starfield-embassy`), each its own crate with a `Cargo.toml`, `src/main.rs`, its own `.cargo/` config and its own `[profile]`/`[patch]`; every one goes through `Hub75` |
 | `README.md` | orientation for a human reader |
 
 `hub75-framebuffer` is the published crate (`0.13.0`, the `interstate75`
 feature). To develop against the sibling checkout instead, uncomment the
-`[patch.crates-io]` block at the end of `Cargo.toml`.
+`[patch.crates-io]` block at the end of the root `Cargo.toml` — and in each
+`examples/<name>/Cargo.toml`, which is its own workspace.
 
 ## Build, test, verify
 
@@ -136,12 +160,12 @@ lines: each one is shaped around the bare-metal target.
 | command | what, and why |
 |---|---|
 | `./test-all.sh` | Host unit tests through `cargo test-rp2350` (the alias names the backend and chip features) with `--target` pinned to the host triple. One pass: the polarity features do not change what a test observes. |
-| `./build-all.sh` | `cargo build-rp2350` for the library and every example, in the four polarity combinations. The alias names `.cargo/config-rp2350.toml` and `rphal,rp2350`; no feature is a default. |
-| `./clippy-all.sh` | `cargo clippy-rp2350 --lib --examples`. Not `--all-targets`: the test harness needs `core::test`, which does not exist for this target. Same feature passes as `build-all.sh`. |
-| `./fmt-all.sh` | `cargo fmt --all`, then `--check`. Do not add a `rustfmt.toml` without agreeing on it. |
-| `cargo run-rp2350 --example gradient` | Builds, flashes and runs over the debug probe (`probe-rs run --chip RP235x`), and streams the `defmt` log back on the same terminal. Without a probe, flash over the USB-C bootloader instead: hold BOOT, tap RESET, `picotool load -u -v -x -t elf <elf>`. |
-| `cargo build-rp2040` / `cargo run-rp2040` (e.g. `--example latched`) | The same, for the RP2040: the alias names `.cargo/config-rp2040.toml` (target `thumbv6m-none-eabi`, `probe-rs run --chip RP2040`) and the `rphal,rp2040` features; no feature is a default. `build-rp2350`/`run-rp2350` are the symmetric names. |
-| `cargo build-embassy` / `cargo run-embassy` | The embassy-rp backend: the aliases name the RP2350 chip config (`.cargo/config-rp2350.toml`, the same target and probe the rp-hal build uses) and the `embassy,rp2350` features. `cargo run-embassy --example gradient-embassy` (or the `run-gradient-embassy` alias) flashes and runs the embassy example. |
+| `./build-all.sh` | The library in the four polarity combinations via `cargo build-rp2350`, then each example package with `(cd examples/<name> && cargo build-rp2350)` and the RP2040 example with `cargo build-rp2040`. The library alias names `.cargo/config-rp2350.toml` and `rphal,rp2350`; no feature is a default. |
+| `./clippy-all.sh` | `cargo clippy-rp2350 --lib` on the library — not `--all-targets`: the test harness needs `core::test`, which does not exist for this target — and `cargo clippy-rp2350` in each example package. |
+| `./fmt-all.sh` | `cargo fmt` in the root and in each example package (they are separate crates), then `--check`. Do not add a `rustfmt.toml` without agreeing on it. |
+| `cd examples/gradient && cargo run-rp2350` | Builds, flashes and runs over the debug probe (`probe-rs run --chip RP235x`), and streams the `defmt` log back on the same terminal. Without a probe, flash over the USB-C bootloader instead: hold BOOT, tap RESET, `picotool load -u -v -x -t elf <elf>`. |
+| `cd examples/gradient-latched && cargo build-rp2040` | The same, for the RP2040: the example's alias names `.cargo/config-rp2040.toml` (target `thumbv6m-none-eabi`, `probe-rs run --chip RP2040`) and its `rp2040` feature; no feature is a default. Every example defines `build-rp2040`/`run-rp2040`. |
+| `cargo build-embassy` (root) / `cd examples/gradient-embassy && cargo run-rp2350` | The embassy-rp backend: the root alias builds the library against `embassy-rp`; the example package builds and flashes the embassy example through its own alias. |
 | `cargo doc-rp2350` | Checks that the documentation builds (the alias names the board and the `--no-deps` flag). A `rustdoc` warning is a bug — nothing denies them here, and there is no `cargo xtask` in this crate. |
 
 There is no CI and no `.github/`. Whatever a change claims is verified, you ran.
@@ -164,10 +188,10 @@ otherwise.
 
 ### Logging
 
-`defmt` over RTT, through the debug probe: `cargo run-rp2350 --example <name>` prints
-it. The examples own the log — `defmt`, `defmt-rtt` and `panic-probe` are
-dev-dependencies, and a log line is a plain `defmt::info!` — so three rules come
-with that.
+`defmt` over RTT, through the debug probe: `cd examples/<name> && cargo run-rp2350`
+prints it. Each example package owns the log — `defmt`, `defmt-rtt` and
+`panic-probe` are its dependencies, and a log line is a plain `defmt::info!` — so
+three rules come with that.
 
 * **The library does not log, and nothing logs from an interrupt.** `defmt`'s
   `acquire` is a critical section, and `on_dma_irq` runs once a frame with the

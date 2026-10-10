@@ -9,8 +9,8 @@
 //! awaited with `wait_for_done().await`; and the clock is `embassy-time`.
 //!
 //! ```text
-//! cargo run --config .cargo/config-rp2350.toml --release \
-//!     --example gradient-embassy --features embassy,rp2350
+//! # probe attached:
+//! cd examples/gradient-embassy && cargo run-rp2350
 //! ```
 #![no_std]
 #![no_main]
@@ -36,8 +36,8 @@ use embedded_graphics::pixelcolor::RgbColor;
 use embedded_graphics::text::Alignment;
 use embedded_graphics::text::Text;
 use fugit::Rate;
-use hub75_framebuffer::bitplane::plain::DmaFrameBuffer;
-use hub75_framebuffer::compute_rows;
+use rp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer;
+use rp_hub75::framebuffer::compute_rows;
 
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;

@@ -1,21 +1,20 @@
 #!/bin/bash
 set -e
 
-# Build the rp-hub75 library and its examples for the RP2350 (Cortex-M33) and
-# the RP2040 (Cortex-M0+).
+# Build the rp-hub75 library and its example packages.
 #
-# The `build-rp2350` alias names the board's config file and features (no feature is
-# a default). The library is built once per library feature combination:
-# `invert-clock` and `invert-oe` select code paths in the library itself. The
-# examples go through `Hub75` and name no polarity, so they are built once.
+# The library is built once per library feature combination: `invert-clock` and
+# `invert-oe` select code paths in the library itself. The `build-rp2350` alias
+# names the board's config file and features (no feature is a default).
+#
+# The examples are separate crates under `examples/`, not members of a Cargo
+# workspace, so each is built in its own directory through its own `build-*`
+# aliases. Each names the HAL features a binary needs — the RT vector table, the
+# picotool header, the RP2040's second-stage bootloader and the critical-section
+# impl — in its own `Cargo.toml`, so the library forces none of them.
 #
 # `20mhz` is an example feature — it sets the rate the examples ask for through
 # `cfg!`, which compiles both arms in every build — so it is not part of the loop.
-# The library does not log; the examples log over defmt, from a dev-dependency,
-# and they are built with the rest.
-#
-# The loop above is RP2350-only; the RP2040 pass at the end is what covers the
-# `invert-clock`/`invert-oe` combinations on that chip.
 for features in "" "invert-clock" "invert-oe" "invert-clock,invert-oe"; do
     if [ -n "$features" ]; then
         extra=(--features "$features")
@@ -29,29 +28,27 @@ for features in "" "invert-clock" "invert-oe" "invert-clock,invert-oe"; do
 done
 
 echo "=========================================="
-echo "Building (examples): cargo build-rp2350 --examples"
-echo "=========================================="
-cargo build-rp2350 --examples
-
-echo "=========================================="
-echo "Building (embassy): cargo build-embassy"
+echo "Building (embassy library): cargo build-embassy"
 echo "=========================================="
 cargo build-embassy
 
 echo "=========================================="
-echo "Building (embassy example): cargo build-embassy --example gradient-embassy"
-echo "=========================================="
-cargo build-embassy --example gradient-embassy
-
-echo "=========================================="
-echo "Building (RP2040): cargo build-rp2040 --lib --features invert-clock,invert-oe"
+echo "Building (RP2040 library): cargo build-rp2040 --lib --features invert-clock,invert-oe"
 echo "=========================================="
 cargo build-rp2040 --lib --features invert-clock,invert-oe
 
+# Each example crate, in its own package.
+for dir in examples/*/; do
+    echo "=========================================="
+    echo "Building (example): ${dir}cargo build-rp2350"
+    echo "=========================================="
+    (cd "$dir" && cargo build-rp2350)
+done
+
 echo "=========================================="
-echo "Building (RP2040 example): cargo build-rp2040 --example latched --features invert-clock,invert-oe"
+echo "Building (RP2040 example): examples/gradient-latched cargo build-rp2040"
 echo "=========================================="
-cargo build-rp2040 --example latched --features invert-clock,invert-oe
+(cd examples/gradient-latched && cargo build-rp2040)
 
 echo "=========================================="
 echo "All builds succeeded!"

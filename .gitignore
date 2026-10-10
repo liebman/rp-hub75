@@ -1,5 +1,7 @@
 /target
 .DS_Store
-__pycache__/
 /plan.md
 /NOTES.md
+# Each example is its own package, so it has its own build directory and lock.
+/examples/*/target
+/examples/*/Cargo.lock

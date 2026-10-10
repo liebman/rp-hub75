@@ -1,83 +1,62 @@
-//! A starfield: the view out of a spaceship's window, flying forward.
+//! A starfield on the embassy-rp backend: the view out of a spaceship's window.
 //!
-//! Stars live in a depth field ahead of the camera. Each frame the camera moves
-//! one step forward, so every star's depth `z` falls and its projection leaves the
-//! center: a star's distance from the center is `offset * Z_FAR / z`, where
-//! `offset` is where it entered the view at `Z_FAR`. A star that passes the near
-//! plane, or leaves the panel on its way out, is re-spawned on the far plane at a
-//! new spot — so the field never empties and the picture streams outward.
+//! The same display as `starfield` — stars in a depth field ahead of the camera,
+//! streaming outward as the camera flies forward — on an embassy executor. A
+//! star's distance from the center is `offset * Z_FAR / z`; a star that passes the
+//! near plane, or leaves the panel on its way out, is re-spawned on the far plane,
+//! so the field never empties.
 //!
-//! A star is an offset and a depth, not a pair of floats: the RP2040 has no
-//! floating-point unit, and one multiply and one divide per star per axis is
-//! cheaper than a soft-float projection. Keeping the *spawn offset* rather than an
-//! absolute position means the projection is a single division with no state to
-//! carry between frames.
-//!
-//! Every star takes a tint from a small palette at spawn — blue-white through
-//! white and yellow to red — and is then darkened by its depth, so a distant star
-//! is dim and a near one is bright. The palette and the depth ramp are the two
-//! knobs for how the field reads.
-//!
-//! The loop is paced by the panel: `swap(...).wait()` returns when the panel picks
-//! up the new frame, so one pass is one refresh. A frame's step is the per-second
-//! speed divided by the driver's `refresh_hz()`, and the division's remainder is
-//! carried — the flight is a wall-clock speed, so a faster panel clock (the
-//! `20mhz` feature roughly doubles the refresh) does not make the stars fly faster.
-//!
-//! There is no random-number generator in the dependency set, and the crate adds
-//! none for a display: a few lines of `xorshift32` are enough to place stars, and
-//! the seed comes from the timer so two power-ups do not draw the same sky.
+//! The differences from `starfield` are all in the setup: embassy's
+//! `#[embassy_executor::main]` replaces `#[entry]`; the `Pio` is built before the
+//! pin set, because a PIO pin is made from it; the DMA channels are handed over as
+//! `ChannelInstance`s; the frame boundary is awaited with `wait_for_done().await`;
+//! and the seed for the field comes from `embassy-time`. The projection, the
+//! palette and the depth ramp are unchanged.
 //!
 //! ```text
 //! # probe attached:
-//! cargo run-rp2350 --example starfield
+//! cd examples/starfield-embassy && cargo run-rp2350
 //! ```
 #![no_std]
 #![no_main]
 
 use defmt_rtt as _;
+use panic_probe as _;
+
+use embassy_executor::Spawner;
+use embassy_rp::bind_interrupts;
+use embassy_rp::interrupt::typelevel::Handler;
+use embassy_rp::peripherals::PIO0;
+use embassy_rp::pio::InterruptHandler;
+use embassy_rp::pio::Pio;
+use embassy_time::Instant;
 use embedded_graphics::geometry::Point;
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::pixelcolor::RgbColor;
-use panic_probe as _;
-use rp_hub75::hal;
-
-use hal::Sio;
-use hal::clocks::Clock;
-use hal::dma::DMAExt;
-use hal::fugit::Rate;
-use hal::gpio::Pins;
-use hub75_framebuffer::bitplane::plain::DmaFrameBuffer;
-use hub75_framebuffer::compute_rows;
+use fugit::Rate;
+use rp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer;
+use rp_hub75::framebuffer::compute_rows;
 
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;
 use rp_hub75::Hub75Pins16;
+use rp_hub75::hal;
 use rp_hub75::hub75_descriptors;
+use rp_hub75::on_dma_irq;
 
-/// The interrupt that walks the framebuffer's BCM sequence (see `gradient`).
-#[unsafe(no_mangle)]
-extern "C" fn DMA_IRQ_1() {
-    rp_hub75::on_dma_irq();
+/// The driver's frame-boundary work, in the DMA interrupt.
+struct DmaIrqHandler;
+
+impl Handler<embassy_rp::interrupt::typelevel::DMA_IRQ_0> for DmaIrqHandler {
+    unsafe fn on_interrupt() {
+        on_dma_irq();
+    }
 }
 
-/// Tell the Boot ROM about our application.
-#[cfg(feature = "rp2350")]
-#[unsafe(link_section = ".start_block")]
-#[used]
-pub static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
-
-/// The RP2040's second-stage bootloader.
-///
-/// The Boot ROM executes the 256 bytes at the start of flash before anything
-/// else, so without them the chip never reaches `main`. `rp2040-boot2` supplies
-/// the code for a W25Q-series flash (the reference boards want this one); a board
-/// with a different flash needs `BOOT_LOADER_GENERIC_03H` here instead. The
-/// RP2350 boots the vector table directly and needs none of this.
-#[cfg(feature = "rp2040")]
-#[unsafe(link_section = ".boot2")]
-#[used]
-pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
+bind_interrupts!(struct Irqs {
+    DMA_IRQ_0 => DmaIrqHandler;
+    PIO0_IRQ_0 => InterruptHandler<PIO0>;
+});
 
 /// The panel this example is wired to: 64×64, 1/32 scan.
 ///
@@ -94,10 +73,6 @@ const PLANES: usize = 6;
 
 /// The framebuffer type this example uses: `hub75-framebuffer`'s plane-major
 /// layout, whose words are the panel's own pin levels.
-///
-/// The two of them are plain statics, and that costs nothing: the engine names
-/// each run's address in the descriptor table, so neither a framebuffer's address
-/// nor its alignment changes the picture or the interrupt load.
 type Fb = DmaFrameBuffer<NROWS, PANEL_WIDTH, PLANES>;
 
 /// A `'static` place for a value, for the driver's `&'static mut` framebuffers.
@@ -113,6 +88,7 @@ macro_rules! mk_static {
         x
     }};
 }
+
 /// How many stars are in the sky.
 const STARS: usize = 32;
 
@@ -168,12 +144,6 @@ const PALETTE: [Rgb888; 7] = [
     Rgb888::new(255, 165, 95),  // orange
     Rgb888::new(255, 110, 80),  // red
 ];
-
-/// Crystal frequency on the Interstate 75 W, in Hz.
-///
-/// The reference board fits a 12 MHz crystal, and the PLLs are configured from
-/// it.
-const XTAL_FREQ_HZ: u32 = 12_000_000;
 
 /// The panel clock, as in the esp-hub75 examples: 10 MHz by default, 20 MHz with
 /// the `20mhz` feature.
@@ -243,34 +213,20 @@ impl Rng {
         star
     }
 }
-#[hal::entry]
-fn main() -> ! {
-    let mut pac = hal::pac::Peripherals::take().unwrap();
-    let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
 
-    let clocks = hal::clocks::init_clocks_and_plls(
-        XTAL_FREQ_HZ,
-        pac.XOSC,
-        pac.CLOCKS,
-        pac.PLL_SYS,
-        pac.PLL_USB,
-        &mut pac.RESETS,
-        &mut watchdog,
-    )
-    .unwrap();
-    #[cfg(feature = "rp2350")]
-    let timer = hal::Timer::new_timer0(pac.TIMER0, &mut pac.RESETS, &clocks);
-    #[cfg(feature = "rp2040")]
-    let timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    let p = embassy_rp::init(Default::default());
 
-    let sio = Sio::new(pac.SIO);
-    let pins = Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
+    // The PIO is built first: embassy makes a PIO pin from it.
+    let mut pio = Pio::new(p.PIO0, Irqs);
+    let pins = Hub75Pins16::new(
+        &mut pio, p.PIN_0, p.PIN_1, p.PIN_2, p.PIN_3, p.PIN_4, p.PIN_5, p.PIN_6, p.PIN_7, p.PIN_8,
+        p.PIN_9, p.PIN_10,
+        // STB and OE are the word's last two signal bits; the clock is not a
+        // signal at all — the side-set drives it, and it is wired to GP11.
+        p.PIN_12, p.PIN_13, p.PIN_11,
     );
-    let dma = pac.DMA.split(&mut pac.RESETS);
 
     // One framebuffer is the panel's at any moment and the other is this loop's;
     // a swap exchanges them.
@@ -278,30 +234,12 @@ fn main() -> ! {
     let fb1: &'static mut Fb = mk_static!(Fb, Fb::new());
 
     let hub75 = Hub75::new(
-        pac.PIO0,
-        dma.ch0,
-        dma.ch1,
-        &mut pac.RESETS,
-        Hub75Pins16::new(
-            pins.gpio0,
-            pins.gpio1,
-            pins.gpio2,
-            pins.gpio3,
-            pins.gpio4,
-            pins.gpio5,
-            pins.gpio6,
-            pins.gpio7,
-            pins.gpio8,
-            pins.gpio9,
-            pins.gpio10,
-            // STB and OE are the word's last two signal bits; the clock is not a
-            // signal at all — the side-set drives it, and it is wired to GP11.
-            pins.gpio12,
-            pins.gpio13,
-            pins.gpio11,
-        ),
-        clocks.system_clock.freq(),
-        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock(PANEL_CLOCK),
+        pio,
+        p.DMA_CH0,
+        p.DMA_CH1,
+        pins,
+        Rate::<u32, 1, 1>::from_raw(hal::clocks::clk_sys_freq()),
+        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_0).with_panel_clock(PANEL_CLOCK),
         fb0,
         hub75_descriptors!(Fb),
     )
@@ -337,8 +275,8 @@ fn main() -> ! {
     let rem = SPEED_PER_SEC % refresh;
     let mut carry = 0;
 
-    // A seed from the timer, so a re-power draws a different sky.
-    let mut rng = Rng::new(timer.get_counter().ticks() as u32);
+    // A seed from the clock, so a re-power draws a different sky.
+    let mut rng = Rng::new(Instant::now().as_ticks() as u32);
     let mut stars: [Star; STARS] = core::array::from_fn(|_| rng.spawn_anywhere());
 
     // fb0 is on the panel now; this loop draws into fb1 until the first swap.
@@ -359,7 +297,10 @@ fn main() -> ! {
         draw(fb, &stars);
 
         match hub75.swap(fb) {
-            Ok(swap) => fb = swap.wait(),
+            Ok(mut swap) => {
+                swap.wait_for_done().await;
+                fb = swap.wait();
+            }
             Err((_error, returned)) => fb = returned,
         }
     }
@@ -419,14 +360,3 @@ fn tint(color: Rgb888, brightness: u8) -> Rgb888 {
         (color.b() as u16 * b / 255) as u8,
     )
 }
-
-/// Program metadata for `picotool info`.
-#[cfg(feature = "rp2350")]
-#[unsafe(link_section = ".bi_entries")]
-#[used]
-pub static PICOTOOL_ENTRIES: [hal::binary_info::EntryAddr; 4] = [
-    hal::binary_info::rp_cargo_bin_name!(),
-    hal::binary_info::rp_cargo_version!(),
-    hal::binary_info::rp_program_description!(c"rp-hub75: a forward-flying starfield"),
-    hal::binary_info::rp_program_build_attribute!(),
-];

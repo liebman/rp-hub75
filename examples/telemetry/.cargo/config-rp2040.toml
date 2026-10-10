@@ -1,0 +1,23 @@
+# RP2040 (Cortex-M0+) build configuration for this example.
+#
+# The library's own copy is at the repository root; this one differs only in the
+# `-L` path to `memory/`, which is relative to this package's directory.
+[build]
+target = "thumbv6m-none-eabi"
+
+[target.thumbv6m-none-eabi]
+rustflags = [
+    # The chip's memory map, named `memory.x` for `link.x`'s `INCLUDE memory.x`.
+    # It must precede `-Tlink.x` so the linker's search path holds it in time.
+    "-C", "link-arg=-L../../memory/rp2040",
+    # --nmagic turns off page alignment of sections (saves flash)
+    "-C", "link-arg=--nmagic",
+    # link.x comes from cortex-m-rt, and pulls in memory.x from the path above.
+    "-C", "link-arg=-Tlink.x",
+    # defmt.x places the .defmt sections and provides the logger symbols, after
+    # link.x.
+    "-C", "link-arg=-Tdefmt.x",
+    "-C", "target-cpu=cortex-m0plus",
+]
+# The debug probe flashes, runs and carries defmt back over RTT.
+runner = "probe-rs run --chip RP2040"

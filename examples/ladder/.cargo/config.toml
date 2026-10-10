@@ -1,0 +1,11 @@
+[alias]
+# The example is its own package, so its aliases are its own. The chip feature is
+# forwarded to the library; no feature is a default.
+build-rp2350  = "build  --config .cargo/config-rp2350.toml --release --features rp2350"
+run-rp2350    = "run    --config .cargo/config-rp2350.toml --release --features rp2350"
+build-rp2040  = "build  --config .cargo/config-rp2040.toml --release --features rp2040"
+run-rp2040    = "run    --config .cargo/config-rp2040.toml --release --features rp2040"
+clippy-rp2350 = "clippy --config .cargo/config-rp2350.toml --release --features rp2350"
+
+[env]
+DEFMT_LOG = "info"

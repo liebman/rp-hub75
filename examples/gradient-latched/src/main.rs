@@ -23,7 +23,7 @@
 //! lit:
 //!
 //! ```text
-//! cargo run-latched-rp2040 --features invert-oe
+//! cargo run-rp2040 --features invert-oe
 //! ```
 //!
 //! Six planes, to match the other examples' frame cost: the latched layout's
@@ -33,7 +33,7 @@
 //!
 //! ```text
 //! # board in BOOTSEL mode:
-//! cargo run-rp2350 --example latched
+//! cargo run-rp2350
 //! ```
 #![no_std]
 #![no_main]
@@ -56,8 +56,8 @@ use hal::clocks::Clock;
 use hal::dma::DMAExt;
 use hal::fugit::Rate;
 use hal::gpio::Pins;
-use hub75_framebuffer::bitplane::latched::DmaFrameBuffer;
-use hub75_framebuffer::compute_rows;
+use rp_hub75::framebuffer::bitplane::latched::DmaFrameBuffer;
+use rp_hub75::framebuffer::compute_rows;
 
 use rp_hub75::Hub75;
 use rp_hub75::Hub75Config;
