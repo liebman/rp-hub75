@@ -52,26 +52,27 @@ loop {
 ## Cargo features
 
 The library's `Cargo.toml` has two groups. Only the library features change how
-the crate drives the panel; the target features pick the HAL. Each example package
-under `examples/` has its own small feature set on top (the chip and `20mhz`).
+the crate drives the panel; the target features pick the HAL and the chip. Each
+example package under `examples/` has its own small feature set on top (the
+target and `20mhz`).
 
 ### Target features
 
-The target is two features named together, one from each axis: the backend
-(`rphal` or `embassy`) and the chip (`rp2040` or `rp2350`). None is a default:
-the aliases in `.cargo/config.toml` name a pair and the config file together, so
-a build missing an axis stops instead of picking a board. `rphal` builds against
-`rp2040-hal` / `rp235x-hal` (which share `rp-hal-common`); `embassy` against
-`embassy-rp`. The PIO and DMA register blocks are the same shape and both HALs
-use the same `pio` crate, so the engine and the stream programs are shared and
-only the port differs. `.cargo/config-rp2040.toml` and
-`.cargo/config-rp2350.toml` carry the per-chip target and runner settings, shared
-by both backends.
+The target is **one** feature, of four, naming a backend family and a chip
+together: `rphal-rp2040`, `rphal-rp2350`, `embassy-rp2040` or `embassy-rp2350`.
+None is a default: the aliases in `.cargo/config.toml` name a feature and the
+config file together, so a build missing the choice stops instead of picking a
+board. The `rphal-*` features build against `rp2040-hal` / `rp235x-hal` (which
+share `rp-hal-common`); the `embassy-*` features against `embassy-rp`. The PIO
+and DMA register blocks are the same shape and both HALs use the same `pio`
+crate, so the engine and the stream programs are shared and only the port
+differs. `.cargo/config-rp2040.toml` and `.cargo/config-rp2350.toml` carry the
+per-chip target and runner settings.
 
-Each chip's `rp-hal` crate is declared under that chip's target triple, so
-`rphal` can name both without building the wrong one — a build is
-`--features rphal,rp2350`, `rphal,rp2040`, `embassy,rp2350`, or
-`embassy,rp2040`.
+Each chip's `rp-hal` crate is declared under that chip's target triple, and
+`embassy-rp` is one optional crate whose own chip feature the target feature
+names, so a build is `--features rphal-rp2350`, `rphal-rp2040`,
+`embassy-rp2350`, or `embassy-rp2040` — one name, not a backend and a chip.
 
 Each *example* under `examples/` is its own package — not a workspace member, so
 it carries `[profile]` and `[patch]` of its own — and it names the HAL features a
@@ -85,10 +86,10 @@ named — its types arrive through `rp_hub75::framebuffer`.
 
 | feature | effect |
 |---|---|
-| `rphal` | the backend against `rp2040-hal` / `rp235x-hal`, which the chip feature selects |
-| `embassy` | the backend against `embassy-rp`, whose chip the chip feature selects |
-| `rp2350` | the RP2350 (Cortex-M33), `thumbv8m.main-none-eabihf`, `rp235x-hal` |
-| `rp2040` | the RP2040 (Cortex-M0+), `thumbv6m-none-eabi`, `rp2040-hal`. Also the RP2040 `memory.x`; the examples place the second-stage bootloader in `.boot2` |
+| `rphal-rp2350` | the rp-hal backend against `rp235x-hal`, for the RP2350 (Cortex-M33), `thumbv8m.main-none-eabihf` |
+| `rphal-rp2040` | the rp-hal backend against `rp2040-hal`, for the RP2040 (Cortex-M0+), `thumbv6m-none-eabi`. Also the RP2040 `memory.x`; the examples place the second-stage bootloader in `.boot2` |
+| `embassy-rp2350` | the embassy-rp backend, built with `embassy-rp/rp235xa`, for the RP2350 |
+| `embassy-rp2040` | the embassy-rp backend, built with `embassy-rp/rp2040`, for the RP2040 |
 
 ### Library features
 
@@ -106,8 +107,9 @@ list.
 
 ### Example features
 
-Each example package defines its own `rp2350`/`rp2040` (forwarded to the library),
-its own `20mhz`, and a pass-through for every **Library feature** above —
+Each example package defines its own `rp2350`/`rp2040` (forwarded to the library
+as the matching target feature), its own `20mhz`, and a pass-through for every
+**Library feature** above —
 `invert-clock`, `invert-oe`, `skip-black-pixels`, `tail-closes-latch`,
 `lead-blank-1` through `lead-blank-32`, `trail-blank-1` through `trail-blank-32`,
 `inter-row-blank-4` through `inter-row-blank-32`, and `reverse-row-order` — so an

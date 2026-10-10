@@ -7,9 +7,9 @@ publish = false
 license = "MIT OR Apache-2.0"
 
 [features]
-# The chip, forwarded to the library; named by an alias in `.cargo/config.toml`.
-rp2350 = ["rp-hub75/rp2350"]
-rp2040 = ["rp-hub75/rp2040"]
+# The target, forwarded to the library; named by an alias in `.cargo/config.toml`.
+rp2350 = ["rp-hub75/embassy-rp2350"]
+rp2040 = ["rp-hub75/embassy-rp2040"]
 # The panel clock: 10 MHz without it, 20 MHz with it (rounded up by the divider).
 20mhz = []
 
@@ -37,7 +37,7 @@ inter-row-blank-32 = ["rp-hub75/inter-row-blank-32"]
 reverse-row-order = ["rp-hub75/reverse-row-order"]
 
 [dependencies]
-rp-hub75 = { path = "../..", features = ["embassy"] }
+rp-hub75 = { path = "../.." }
 embedded-graphics = "0.8.2"
 # The framebuffers' `'static` storage; the crate arrives through the library.
 static_cell = "2.1"

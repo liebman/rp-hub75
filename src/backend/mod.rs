@@ -12,23 +12,30 @@
 
 use crate::driver::Hub75Pins;
 
-#[cfg(feature = "rphal")]
+// The target is one of four features, each naming a backend family and a chip.
+// The predicates below read that one choice; a build script would collapse them
+// to a single `#[cfg]`, but this crate has none, so the feature name is the only
+// vocabulary. `rphal-*` selects the rp-hal port, `embassy-*` the embassy-rp one;
+// `*-rp2350` selects the RP2350's four DMA interrupt lines, `*-rp2040` the
+// RP2040's two.
+
+#[cfg(any(feature = "rphal-rp2040", feature = "rphal-rp2350"))]
 mod rphal;
 
 /// The bus-window checks, shared by both backends.
 mod window;
-#[cfg(feature = "rphal")]
+#[cfg(any(feature = "rphal-rp2040", feature = "rphal-rp2350"))]
 #[doc(inline)]
 pub use rphal::{Hub75Pins8, Hub75Pins16, PioPin};
-#[cfg(feature = "rphal")]
+#[cfg(any(feature = "rphal-rp2040", feature = "rphal-rp2350"))]
 pub(crate) use rphal::{arm, clear_intr, intr_pending};
 
-#[cfg(feature = "embassy")]
+#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
 mod embassy;
-#[cfg(feature = "embassy")]
+#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
 #[doc(inline)]
 pub use embassy::{EmbassyPins, Hub75Pins8, Hub75Pins16, PioPin};
-#[cfg(feature = "embassy")]
+#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
 pub(crate) use embassy::{arm, clear_intr, intr_pending};
 
 /// The two PIO stream programs and the `Stream` pairing a program with its
@@ -38,18 +45,39 @@ pub(crate) use embassy::{arm, clear_intr, intr_pending};
 /// `pio::pio_asm!` program is the same type for either.
 mod programs;
 
-#[cfg(feature = "embassy")]
+#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
 pub use embassy_rp as hal;
 /// The HAL this build targets.
 ///
-/// Selected by the backend and chip features (one of each), so the driver, the
-/// examples, and host code all name one `hal` path. An rp-hal build names the
-/// chip's HAL; an embassy build names `embassy-rp`, whose chip comes from the
-/// chip feature.
-#[cfg(all(feature = "rphal", feature = "rp2350"))]
+/// Selected by the one target feature, so the driver, the examples, and host
+/// code all name one `hal` path. An rp-hal build names the chip's HAL; an
+/// embassy build names `embassy-rp`, whose own chip feature the target feature
+/// enabled.
+#[cfg(feature = "rphal-rp2350")]
 pub use rp235x_hal as hal;
-#[cfg(all(feature = "rphal", feature = "rp2040"))]
+#[cfg(feature = "rphal-rp2040")]
 pub use rp2040_hal as hal;
+
+/// The interrupt line index for a `DMA_IRQ_n`.
+///
+/// The RP2350 has four DMA interrupt lines and the RP2040 two, so lines 2 and 3
+/// exist only in an RP2350 build; an application cannot name them on the RP2040.
+pub(crate) fn line_index(irq: hal::pac::Interrupt) -> Option<u8> {
+    #[cfg(any(feature = "rphal-rp2350", feature = "embassy-rp2350"))]
+    {
+        if let hal::pac::Interrupt::DMA_IRQ_2 = irq {
+            return Some(2);
+        }
+        if let hal::pac::Interrupt::DMA_IRQ_3 = irq {
+            return Some(3);
+        }
+    }
+    match irq {
+        hal::pac::Interrupt::DMA_IRQ_0 => Some(0),
+        hal::pac::Interrupt::DMA_IRQ_1 => Some(1),
+        _ => None,
+    }
+}
 
 /// Programs and observes a DMA channel.
 ///
@@ -83,7 +111,7 @@ pub trait ChannelSetup {
     fn al3_trans_count(&self) -> u32;
 }
 
-#[cfg(feature = "rphal")]
+#[cfg(any(feature = "rphal-rp2040", feature = "rphal-rp2350"))]
 impl<C: hal::dma::SingleChannel> ChannelSetup for C {
     fn id(&self) -> u8 {
         hal::dma::SingleChannel::id(self)
@@ -106,7 +134,7 @@ impl<C: hal::dma::SingleChannel> ChannelSetup for C {
     }
 }
 
-#[cfg(feature = "embassy")]
+#[cfg(any(feature = "embassy-rp2040", feature = "embassy-rp2350"))]
 impl ChannelSetup for embassy::DmaChannel {
     fn id(&self) -> u8 {
         self.id()

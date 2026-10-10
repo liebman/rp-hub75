@@ -282,23 +282,6 @@ static SWAP_DONE: AtomicBool = AtomicBool::new(false);
 /// Set once a driver exists.
 static DRIVER_TAKEN: AtomicBool = AtomicBool::new(false);
 
-/// The interrupt line index for a `DMA_IRQ_n`.
-///
-/// The RP2350 has four DMA interrupt lines and the RP2040 two, so lines 2 and 3
-/// exist only in the `rp2350` build; an application cannot name them on the
-/// RP2040.
-fn line_index(irq: pac::Interrupt) -> Option<u8> {
-    match irq {
-        pac::Interrupt::DMA_IRQ_0 => Some(0),
-        pac::Interrupt::DMA_IRQ_1 => Some(1),
-        #[cfg(feature = "rp2350")]
-        pac::Interrupt::DMA_IRQ_2 => Some(2),
-        #[cfg(feature = "rp2350")]
-        pac::Interrupt::DMA_IRQ_3 => Some(3),
-        _ => None,
-    }
-}
-
 /// A `Waker` the interrupt can poke, without an executor.
 ///
 /// `rp235x-hal`'s equivalent (`async_utils::IrqWaker`) is sealed, but this is
@@ -437,7 +420,7 @@ where
     pub(crate) fn reserve(config: Hub75Config) -> Result<u8, Hub75Error> {
         // Resolve the line before claiming the driver, so a configuration the
         // caller can correct does not consume the one driver for good.
-        let line = line_index(config.interrupt).ok_or(Hub75Error::NotADmaIrq)?;
+        let line = backend::line_index(config.interrupt).ok_or(Hub75Error::NotADmaIrq)?;
         if DRIVER_TAKEN.swap(true, Ordering::AcqRel) {
             return Err(Hub75Error::AlreadyInitialised);
         }

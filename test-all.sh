@@ -15,8 +15,9 @@ set -e
 # feature and changes nothing here, and the library does not log: the examples
 # own the log, through defmt as a dev-dependency.
 #
-# The `test-rp2350` alias names the board feature (no feature is a default), because
-# the library needs a HAL to compile; the host triple is added here.
+# The `test-rp2350` alias names the board feature `rphal-rp2350` (no feature is a
+# default), because the library needs a HAL to compile; the host triple is added
+# here.
 HOST_TARGET=$(rustc -vV | sed -n 's/^host: //p')
 
 echo "=========================================="

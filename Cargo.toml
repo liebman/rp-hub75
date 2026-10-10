@@ -13,26 +13,14 @@ version = "0.1.0"
 name = "rp_hub75"
 
 [features]
-# Two axes, one feature each, no defaults: the backend family (`rphal` or
-# `embassy`) and the chip (`rp2040` or `rp2350`).
-#
-# `rphal` names both chip crates; each is declared only under its own target
-# table below, so the wrong chip's crate is never resolved.
-rphal = ["dep:rp235x-hal", "dep:rp2040-hal"]
-embassy = ["dep:embassy-rp", "embassy-rp/unstable-pac"]
+rphal-rp2040 = ["dep:rp2040-hal"]
+rphal-rp2350 = ["dep:rp235x-hal"]
+embassy-rp2040 = ["dep:embassy-rp", "embassy-rp/rp2040"]
+embassy-rp2350 = ["dep:embassy-rp", "embassy-rp/rp235xa"]
 
-# The weak `?` is a no-op in an rp-hal build, where embassy-rp is not enabled.
-rp2350 = ["embassy-rp?/rp235xa"]
-rp2040 = ["embassy-rp?/rp2040"]
-
-# --- Library features --------------------------------------------------------
-#
-# Panel tunings; those that forward to `hub75-framebuffer` change the words it
-# streams. `invert-clock` inverts the clock pad's output; `invert-oe` forwards
-# the output-enable polarity to the framebuffer.
 invert-clock = []
-invert-oe = ["hub75-framebuffer/invert-oe"]
 
+invert-oe = ["hub75-framebuffer/invert-oe"]
 skip-black-pixels = ["hub75-framebuffer/skip-black-pixels"]
 tail-closes-latch = ["hub75-framebuffer/tail-closes-latch"]
 lead-blank-1 = ["hub75-framebuffer/lead-blank-1"]
@@ -62,7 +50,7 @@ embedded-graphics = "0.8.2"
 portable-atomic = { version = "1", default-features = false }
 hub75-framebuffer = { version = "0.13.0", features = ["interstate75"] }
 pio = "0.3"
-embassy-rp = { version = "0.10", optional = true, default-features = false }
+embassy-rp = { version = "0.10", optional = true, default-features = false, features = ["unstable-pac"] }
 static_cell = "2.1"
 
 [profile.dev]

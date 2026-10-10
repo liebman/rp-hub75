@@ -5,7 +5,7 @@ set -e
 #
 # The library is built once per library feature combination: `invert-clock` and
 # `invert-oe` select code paths in the library itself. The `build-rp2350` alias
-# names the board's config file and features (no feature is a default).
+# names the board's config file and target feature (no feature is a default).
 #
 # The examples are separate crates under `examples/`, not members of a Cargo
 # workspace, so each is built in its own directory through its own `build-*`

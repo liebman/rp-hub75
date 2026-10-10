@@ -640,9 +640,9 @@ pub(crate) fn arm(flag: u32, line: u8) {
     let register = match line {
         0 => dma.inte0().as_ptr(),
         1 => dma.inte1().as_ptr(),
-        #[cfg(feature = "rp2350")]
+        #[cfg(feature = "rphal-rp2350")]
         2 => dma.inte2().as_ptr(),
-        #[cfg(feature = "rp2350")]
+        #[cfg(feature = "rphal-rp2350")]
         3 => dma.inte3().as_ptr(),
         _ => unreachable!("a DMA interrupt line is 0 to 3"),
     };

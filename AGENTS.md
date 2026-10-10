@@ -38,13 +38,15 @@ change must not break, and the commands that verify it.
   `out pins, N` cannot fall out of step with the word. The 8-bit window has no
   reserved bit, so its clock is always outside it (`pins::latched`, pinned to
   `LATCHED_PINMAP`).
-* The backend is a build-time choice on two features named together — backend
-  (`rphal` or `embassy`) and chip (`rp2040` or `rp2350`); neither is a default.
-  `src/backend/mod.rs` is the only place the choice is read; `src/driver.rs`,
-  `src/descriptor.rs` and `src/pins.rs` carry no `#[cfg(feature = ...)]`. The two
-  `rp-hal` parts share `rp-hal-common`, and `embassy-rp` uses the same PAC block and
-  the same `pio` crate, so `src/backend/programs.rs` is shared; each backend's
-  `Hub75::new` still takes its own peripheral types.
+* The target is a build-time choice on one feature of four —
+  `rphal-rp2040`, `rphal-rp2350`, `embassy-rp2040` or `embassy-rp2350` — each
+  naming a backend family and a chip together; none is a default. `rphal-*` is the
+  rp-hal port, `embassy-*` the embassy-rp one. `src/backend/mod.rs` is the only
+  place the choice is read; `src/driver.rs`, `src/descriptor.rs` and `src/pins.rs`
+  carry no `#[cfg(feature = ...)]`. The two `rp-hal` parts share `rp-hal-common`,
+  and `embassy-rp` uses the same PAC block and the same `pio` crate, so
+  `src/backend/programs.rs` is shared; each backend's `Hub75::new` still takes its
+  own peripheral types.
 * The library names only what the library needs. A binary's RT vector table and entry
   point, picotool header, RP2040 second-stage bootloader and critical-section
   implementation are named by its example package. A library does not supply
@@ -56,7 +58,8 @@ change must not break, and the commands that verify it.
   `disable-blocking-mode`. Two defmt majors cannot share an image, so neither the
   HAL's nor the framebuffer's own defmt feature is enabled.
 * The RP2040 has two DMA interrupt lines (the RP2350 has four) and no atomic
-  compare-and-swap; both are handled in `src/driver.rs` and `Cargo.toml`.
+  compare-and-swap; the line index is `src/backend/mod.rs`'s (`line_index`) and the
+  atomic shim is `Cargo.toml`'s per-target `portable-atomic`.
 * A new library tuning feature is forwarded by every example package and listed in
   the README feature tables.
 * A board is not a panel. The Interstate 75 W is a HUB75 **header**: panel geometry is
@@ -78,12 +81,12 @@ lines: each one is shaped around the bare-metal target.
 
 | command | what, and why |
 |---|---|
-| `./test-all.sh` | Host unit tests through `cargo test-rp2350` (the alias names the backend and chip features) with `--target` pinned to the host triple. One pass: the polarity features do not change what a test observes. |
-| `./build-all.sh` | The library in the four polarity combinations via `cargo build-rp2350`, then each example package with `(cd examples/<name> && cargo build-rp2350)` and the RP2040 example with `cargo build-rp2040`. The library alias names `.cargo/config-rp2350.toml` and `rphal,rp2350`; no feature is a default. |
+| `./test-all.sh` | Host unit tests through `cargo test-rp2350` (the alias names the one `rphal-rp2350` target feature) with `--target` pinned to the host triple. One pass: the polarity features do not change what a test observes. |
+| `./build-all.sh` | The library in the four polarity combinations via `cargo build-rp2350`, then each example package with `(cd examples/<name> && cargo build-rp2350)` and the RP2040 example with `cargo build-rp2040`. The library alias names `.cargo/config-rp2350.toml` and `rphal-rp2350`; no feature is a default. |
 | `./clippy-all.sh` | `cargo clippy-rp2350 --lib` on the library — not `--all-targets`: the test harness needs `core::test`, which does not exist for this target — and `cargo clippy-rp2350` in each example package. |
 | `./fmt-all.sh` | `cargo fmt` in the root and in each example package (they are separate crates), then `--check`. `./fmt-all.sh --check` is the CI pass: it reports and does not write. Do not add a `rustfmt.toml` without agreeing on it. |
 | `cd examples/gradient && cargo run-rp2350` | Builds, flashes and runs over the debug probe (`probe-rs run --chip RP235x`), and streams the `defmt` log back on the same terminal. |
-| `cd examples/gradient-latched && cargo build-rp2040` | The same, for the RP2040: the example's alias names `.cargo/config-rp2040.toml` (target `thumbv6m-none-eabi`, `probe-rs run --chip RP2040`) and its `rp2040` feature; no feature is a default. Every example defines `build-rp2040`/`run-rp2040`. |
+| `cd examples/gradient-latched && cargo build-rp2040` | The same, for the RP2040: the example's alias names `.cargo/config-rp2040.toml` (target `thumbv6m-none-eabi`, `probe-rs run --chip RP2040`) and its `rp2040` feature, which forwards the library's `rphal-rp2040`; no feature is a default. Every example defines `build-rp2040`/`run-rp2040`. |
 | `cargo build-embassy` (root) / `cd examples/gradient-embassy && cargo run-rp2350` | The embassy-rp backend: the root alias builds the library against `embassy-rp`; the example package builds and flashes the embassy example through its own alias. |
 | `cargo doc-rp2350` | Checks that the documentation builds (the alias names the board and the `--no-deps` flag). A `rustdoc` warning is a bug — nothing denies them here, and there is no `cargo xtask` in this crate. |
 
