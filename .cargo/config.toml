@@ -3,10 +3,10 @@
 # There is no default target and no default feature. The settings that depend on
 # the *chip* — target triple, rustflags, probe runner — live in the per-chip
 # `.cargo/config-rp2040.toml` / `.cargo/config-rp2350.toml`, and each points the
-# linker's `-L` at its own `memory/<chip>/memory.x`. The *feature* picks the HAL,
-# rp-hal or embassy-rp, which is orthogonal: the embassy aliases name the same chip
-# config file as the rp-hal ones. Every alias therefore names a chip config and
-# the features together, and no feature is a default.
+# linker's `-L` at its own `memory/<chip>/memory.x`. A *single* feature picks the
+# HAL and the chip together (`rphal-rp2040`, `rphal-rp2350`, `embassy-rp2040`,
+# `embassy-rp2350`); every alias names a chip config and one feature, and no
+# feature is a default.
 #
 # Those per-chip files are the single place the settings live: cargo *appends* a
 # `--config` file's `rustflags` array to the base config's, so repeating them here
@@ -20,26 +20,27 @@
 # each with its own `.cargo/config.toml` and per-chip config files, so a build of
 # one is `cd examples/<name> && cargo run-rp2350` (or the scripts in the root).
 #
-# Each alias names its chip config file and its features. No feature is a default,
-# and the config file is what supplies the chip's target, rustflags and probe. The
-# features name a backend and a chip: `rphal` or `embassy`, then `rp2350` or
-# `rp2040`. A chip build names only what the library uses; the RT vector table, the
-# picotool header, the second-stage bootloader and the critical-section impl are
-# each example package's business.
+# Each alias names its chip config file and its one target feature. No feature is
+# a default, and the config file is what supplies the chip's target, rustflags
+# and probe. The feature names a backend and a chip together: `rphal-rp2040`,
+# `rphal-rp2350`, `embassy-rp2040` or `embassy-rp2350`. A chip build names only
+# what the library uses; the RT vector table, the picotool header, the
+# second-stage bootloader and the critical-section impl are each example
+# package's business.
 
 # The two chips against rp-hal.
-build-rp2350 = "build --config .cargo/config-rp2350.toml --release --features rphal,rp2350"
-build-rp2040 = "build --config .cargo/config-rp2040.toml --release --features rphal,rp2040"
+build-rp2350 = "build --config .cargo/config-rp2350.toml --release --features rphal-rp2350"
+build-rp2040 = "build --config .cargo/config-rp2040.toml --release --features rphal-rp2040"
 
-# The embassy-rp backend: the same chips, the `embassy` backend feature.
-build-embassy        = "build  --config .cargo/config-rp2350.toml --release --features embassy,rp2350"
-clippy-embassy       = "clippy --config .cargo/config-rp2350.toml --release --features embassy,rp2350"
-doc-embassy          = "doc    --config .cargo/config-rp2350.toml --no-deps --features embassy,rp2350"
-build-embassy-rp2040 = "build  --config .cargo/config-rp2040.toml --release --features embassy,rp2040"
+# The embassy-rp backend: the same chips, the `embassy-*` target features.
+build-embassy        = "build  --config .cargo/config-rp2350.toml --release --features embassy-rp2350"
+clippy-embassy       = "clippy --config .cargo/config-rp2350.toml --release --features embassy-rp2350"
+doc-embassy          = "doc    --config .cargo/config-rp2350.toml --no-deps --features embassy-rp2350"
+build-embassy-rp2040 = "build  --config .cargo/config-rp2040.toml --release --features embassy-rp2040"
 
 # The lint, doc and test passes the scripts use; they name the board too, so the
 # scripts carry no flags. The test pass keeps the debug profile: `src/driver.rs`
 # relies on `debug_assert!`, which `--release` would compile out.
-clippy-rp2350 = "clippy --config .cargo/config-rp2350.toml --release --features rphal,rp2350"
-doc-rp2350    = "doc    --config .cargo/config-rp2350.toml --no-deps --features rphal,rp2350"
-test-rp2350   = "test   --config .cargo/config-rp2350.toml --lib     --features rphal,rp2350"
+clippy-rp2350 = "clippy --config .cargo/config-rp2350.toml --release --features rphal-rp2350"
+doc-rp2350    = "doc    --config .cargo/config-rp2350.toml --no-deps --features rphal-rp2350"
+test-rp2350   = "test   --config .cargo/config-rp2350.toml --lib     --features rphal-rp2350"

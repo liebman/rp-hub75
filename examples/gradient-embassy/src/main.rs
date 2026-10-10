@@ -35,7 +35,6 @@ use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::pixelcolor::RgbColor;
 use embedded_graphics::text::Alignment;
 use embedded_graphics::text::Text;
-use fugit::Rate;
 use rp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer;
 use rp_hub75::framebuffer::compute_rows;
 
@@ -97,8 +96,11 @@ const COUNTER_MAX: u32 = 99_999;
 /// The panel clock, as in the esp-hub75 examples: 10 MHz by default, 20 MHz with
 /// the `20mhz` feature. The divider rounds up, so the panel runs at this or the
 /// next slower clock — `Refresh:` on the display is the truth.
-const PANEL_CLOCK: Rate<u32, 1, 1> =
-    Rate::<u32, 1, 1>::MHz(if cfg!(feature = "20mhz") { 20 } else { 10 });
+const PANEL_CLOCK_HZ: u32 = if cfg!(feature = "20mhz") {
+    20_000_000
+} else {
+    10_000_000
+};
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -129,8 +131,8 @@ async fn main(_spawner: Spawner) {
         p.DMA_CH0,
         p.DMA_CH1,
         pins,
-        Rate::<u32, 1, 1>::from_raw(hal::clocks::clk_sys_freq()),
-        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_0).with_panel_clock(PANEL_CLOCK),
+        hal::clocks::clk_sys_freq(),
+        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_0).with_panel_clock_hz(PANEL_CLOCK_HZ),
         fb0,
         hub75_descriptors!(Fb),
     )
@@ -149,9 +151,9 @@ async fn main(_spawner: Spawner) {
     );
     defmt::info!(
         "panel clock {} Hz -> divider /{} -> {} Hz, {} Hz refresh, {} runs a refresh",
-        PANEL_CLOCK.to_Hz(),
+        PANEL_CLOCK_HZ,
         hub75.divider(),
-        hub75.panel_clock().to_Hz(),
+        hub75.panel_clock_hz(),
         hub75.refresh_hz(),
         hub75.runs_per_refresh()
     );

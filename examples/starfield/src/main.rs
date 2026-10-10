@@ -45,7 +45,6 @@ use rp_hub75::hal;
 use hal::Sio;
 use hal::clocks::Clock;
 use hal::dma::DMAExt;
-use hal::fugit::Rate;
 use hal::gpio::Pins;
 use rp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer;
 use rp_hub75::framebuffer::compute_rows;
@@ -180,8 +179,11 @@ const XTAL_FREQ_HZ: u32 = 12_000_000;
 ///
 /// The driver rounds the divider up, so what the panel runs at is this or the next
 /// slower divider's clock.
-const PANEL_CLOCK: Rate<u32, 1, 1> =
-    Rate::<u32, 1, 1>::MHz(if cfg!(feature = "20mhz") { 20 } else { 10 });
+const PANEL_CLOCK_HZ: u32 = if cfg!(feature = "20mhz") {
+    20_000_000
+} else {
+    10_000_000
+};
 
 /// A star: where it entered the view, how deep it is, and its tint.
 struct Star {
@@ -300,8 +302,8 @@ fn main() -> ! {
             pins.gpio13,
             pins.gpio11,
         ),
-        clocks.system_clock.freq(),
-        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock(PANEL_CLOCK),
+        clocks.system_clock.freq().to_Hz(),
+        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock_hz(PANEL_CLOCK_HZ),
         fb0,
         hub75_descriptors!(Fb),
     )
@@ -318,9 +320,9 @@ fn main() -> ! {
     );
     defmt::info!(
         "panel clock {} Hz -> divider /{} -> {} Hz, {} Hz refresh, {} runs a refresh",
-        PANEL_CLOCK.to_Hz(),
+        PANEL_CLOCK_HZ,
         hub75.divider(),
-        hub75.panel_clock().to_Hz(),
+        hub75.panel_clock_hz(),
         hub75.refresh_hz(),
         hub75.runs_per_refresh()
     );
