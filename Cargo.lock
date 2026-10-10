@@ -1109,7 +1109,6 @@ dependencies = [
  "critical-section",
  "embassy-rp",
  "embedded-graphics",
- "fugit",
  "hub75-framebuffer",
  "pio",
  "portable-atomic",

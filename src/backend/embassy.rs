@@ -21,13 +21,10 @@ use embassy_rp::pio::Pin;
 use embassy_rp::pio::Pio;
 use embassy_rp::pio::ShiftConfig;
 use embassy_rp::pio::ShiftDirection;
-use fugit::Rate;
 use hub75_framebuffer::FrameBuffer;
 
 use super::BringUp;
-use super::programs::Stream;
-use super::programs::hub75_stream8;
-use super::programs::hub75_stream16;
+use super::programs::stream_for;
 use super::window::SIGNAL_COUNT;
 use super::window::SIGNAL_COUNT8;
 use super::window::check_bus;
@@ -185,13 +182,9 @@ pub trait EmbassyPins: Hub75Pins {
 
 /// Drives the `set_pin_dirs` loop: the signals then the clock.
 macro_rules! embassy_pins {
-    ($set:ty, $word:ty, $stream:expr, $count:expr) => {
+    ($set:ty, $word:ty, $count:expr) => {
         impl Hub75Pins for $set {
             type Word = $word;
-
-            fn stream() -> Stream {
-                $stream()
-            }
 
             fn base(&self) -> u8 {
                 self.base
@@ -225,8 +218,8 @@ macro_rules! embassy_pins {
     };
 }
 
-embassy_pins!(Hub75Pins16, u16, hub75_stream16, SIGNAL_COUNT);
-embassy_pins!(Hub75Pins8, u8, hub75_stream8, SIGNAL_COUNT8);
+embassy_pins!(Hub75Pins16, u16, SIGNAL_COUNT);
+embassy_pins!(Hub75Pins8, u8, SIGNAL_COUNT8);
 
 // ---------------------------------------------------------------------------
 // DMA channels
@@ -237,7 +230,7 @@ embassy_pins!(Hub75Pins8, u8, hub75_stream8, SIGNAL_COUNT8);
 /// embassy's `Channel` binds an interrupt and is reserved for embassy's async
 /// transfers, so the driver programs the PAC channel block directly. The index
 /// comes from the [`ChannelInstance`] the constructor is handed.
-pub struct DmaChannel {
+pub(crate) struct DmaChannel {
     id: u8,
 }
 
@@ -366,25 +359,23 @@ pub(crate) fn clear_intr(line: u8, flag: u32) {
 ///
 /// The `Pio` is leaked with [`core::mem::forget`]: embassy's `StateMachine`
 /// disables itself on drop, and this driver runs for the life of the program.
-pub fn bring_up<P: EmbassyPins>(
+pub(crate) fn bring_up<P: EmbassyPins>(
     mut pio: Pio<'static, PIO0>,
     pins: P,
-    system_clock: Rate<u32, 1, 1>,
+    system_clock_hz: u32,
     config: Hub75Config,
 ) -> BringUp<P> {
-    let divider = divider_for(system_clock.to_Hz(), config.panel_clock.to_Hz());
+    let divider = divider_for(system_clock_hz, config.panel_clock_hz);
     assert!(
         divider >= 1 && divider <= u16::MAX as u32,
         "the panel clock is not representable: divider {divider} is outside \
-         the PIO's 1..=65535 range (system clock {} Hz, panel clock {} Hz)",
-        system_clock.to_Hz(),
-        config.panel_clock.to_Hz()
+         the PIO's 1..=65535 range (system clock {system_clock_hz} Hz, panel clock {} Hz)",
+        config.panel_clock_hz
     );
     let divider = divider as u16;
-    let achieved =
-        Rate::<u32, 1, 1>::from_raw(achieved_clock(system_clock.to_Hz(), divider as u32));
+    let panel_clock_hz = achieved_clock(system_clock_hz, divider as u32);
 
-    let stream = P::stream();
+    let stream = stream_for::<P::Word>();
     let loaded = pio.common.load_program(stream.program());
 
     // The clock's polarity is the pad's, so the pin is inverted before the
@@ -431,7 +422,7 @@ pub fn bring_up<P: EmbassyPins>(
     BringUp {
         pins,
         divider,
-        panel_clock: achieved,
+        panel_clock_hz,
         fifo,
         dreq,
     }
@@ -471,7 +462,7 @@ where
         channel: Peri<'static, CH>,
         control: Peri<'static, CCH>,
         pins: P,
-        system_clock: Rate<u32, 1, 1>,
+        system_clock_hz: u32,
         config: Hub75Config,
         fb: &'static mut FB,
         descriptors: &'static mut Hub75Descriptors<FB, N>,
@@ -487,7 +478,7 @@ where
         let _ = (channel, control);
 
         let irq_line = Self::reserve(config)?;
-        let bringup = bring_up(pio, pins, system_clock, config);
+        let bringup = bring_up(pio, pins, system_clock_hz, config);
         Self::start_from(data, ctrl, bringup, config, irq_line, fb, descriptors)
     }
 }

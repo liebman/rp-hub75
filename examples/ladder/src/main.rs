@@ -36,7 +36,6 @@ use rp_hub75::hal;
 use hal::Sio;
 use hal::clocks::Clock;
 use hal::dma::DMAExt;
-use hal::fugit::Rate;
 use hal::gpio::Pins;
 use rp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer;
 use rp_hub75::framebuffer::compute_rows;
@@ -127,10 +126,13 @@ const XTAL_FREQ_HZ: u32 = 12_000_000;
 /// `20mhz` feature.
 ///
 /// The driver rounds the divider up, so what the panel runs at is this or the next
-/// slower divider's clock — `Hub75::panel_clock` and `Hub75::divider` are the
+/// slower divider's clock — `Hub75::panel_clock_hz` and `Hub75::divider` are the
 /// truth, not this number.
-const PANEL_CLOCK: Rate<u32, 1, 1> =
-    Rate::<u32, 1, 1>::MHz(if cfg!(feature = "20mhz") { 20 } else { 10 });
+const PANEL_CLOCK_HZ: u32 = if cfg!(feature = "20mhz") {
+    20_000_000
+} else {
+    10_000_000
+};
 
 #[hal::entry]
 fn main() -> ! {
@@ -189,10 +191,10 @@ fn main() -> ! {
             pins.gpio13,
             pins.gpio11,
         ),
-        clocks.system_clock.freq(),
+        clocks.system_clock.freq().to_Hz(),
         // The one knob that trades timing margin for refresh rate: a rung that
         // tears or smears only as the clock rises is the ribbon's ceiling.
-        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock(PANEL_CLOCK),
+        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock_hz(PANEL_CLOCK_HZ),
         fb0,
         hub75_descriptors!(Fb),
     )

@@ -33,7 +33,6 @@ use embassy_time::Instant;
 use embedded_graphics::geometry::Point;
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::pixelcolor::RgbColor;
-use fugit::Rate;
 use rp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer;
 use rp_hub75::framebuffer::compute_rows;
 
@@ -150,8 +149,11 @@ const PALETTE: [Rgb888; 7] = [
 ///
 /// The driver rounds the divider up, so what the panel runs at is this or the next
 /// slower divider's clock.
-const PANEL_CLOCK: Rate<u32, 1, 1> =
-    Rate::<u32, 1, 1>::MHz(if cfg!(feature = "20mhz") { 20 } else { 10 });
+const PANEL_CLOCK_HZ: u32 = if cfg!(feature = "20mhz") {
+    20_000_000
+} else {
+    10_000_000
+};
 
 /// A star: where it entered the view, how deep it is, and its tint.
 struct Star {
@@ -238,8 +240,8 @@ async fn main(_spawner: Spawner) {
         p.DMA_CH0,
         p.DMA_CH1,
         pins,
-        Rate::<u32, 1, 1>::from_raw(hal::clocks::clk_sys_freq()),
-        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_0).with_panel_clock(PANEL_CLOCK),
+        hal::clocks::clk_sys_freq(),
+        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_0).with_panel_clock_hz(PANEL_CLOCK_HZ),
         fb0,
         hub75_descriptors!(Fb),
     )
@@ -256,9 +258,9 @@ async fn main(_spawner: Spawner) {
     );
     defmt::info!(
         "panel clock {} Hz -> divider /{} -> {} Hz, {} Hz refresh, {} runs a refresh",
-        PANEL_CLOCK.to_Hz(),
+        PANEL_CLOCK_HZ,
         hub75.divider(),
-        hub75.panel_clock().to_Hz(),
+        hub75.panel_clock_hz(),
         hub75.refresh_hz(),
         hub75.runs_per_refresh()
     );

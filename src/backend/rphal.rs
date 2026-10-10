@@ -9,9 +9,7 @@
 use super::BringUp;
 use super::ChannelSetup;
 use super::hal;
-use super::programs::Stream;
-use super::programs::hub75_stream8;
-use super::programs::hub75_stream16;
+use super::programs::stream_for;
 use crate::descriptor::BusWord;
 use crate::descriptor::Hub75Descriptors;
 use crate::driver::Hub75;
@@ -20,7 +18,6 @@ use crate::driver::Hub75Error;
 use crate::driver::Hub75Pins;
 use crate::driver::achieved_clock;
 use crate::driver::divider_for;
-use fugit::Rate;
 use hal::dma::SingleChannel;
 use hal::gpio::DynPinId;
 use hal::gpio::FunctionNull;
@@ -288,10 +285,6 @@ impl Hub75Pins16 {
 impl Hub75Pins for Hub75Pins16 {
     type Word = u16;
 
-    fn stream() -> Stream {
-        hub75_stream16()
-    }
-
     fn base(&self) -> u8 {
         self.base
     }
@@ -392,10 +385,6 @@ impl Hub75Pins8 {
 impl Hub75Pins for Hub75Pins8 {
     type Word = u8;
 
-    fn stream() -> Stream {
-        hub75_stream8()
-    }
-
     fn base(&self) -> u8 {
         self.base
     }
@@ -424,27 +413,25 @@ impl Hub75Pins for Hub75Pins8 {
 /// The panel clock is a ceiling: the PIO divider is an integer and is rounded
 /// up, so a request no divider hits exactly runs the panel at the next slower
 /// clock rather than faster than the panel is rated for.
-pub fn bring_up<P: Hub75Pins>(
+pub(crate) fn bring_up<P: Hub75Pins>(
     pio: pac::PIO0,
     resets: &mut pac::RESETS,
     pins: P,
-    system_clock: Rate<u32, 1, 1>,
+    system_clock_hz: u32,
     config: Hub75Config,
 ) -> super::BringUp<P> {
     // A word every `CYCLES_PER_WORD` PIO cycles, so the divider is the ratio
     // between the system clock and that many times the panel clock, rounded up
     // so the panel never runs faster than the clock it was given.
-    let divider = divider_for(system_clock.to_Hz(), config.panel_clock.to_Hz());
+    let divider = divider_for(system_clock_hz, config.panel_clock_hz);
     assert!(
         divider >= 1 && divider <= u16::MAX as u32,
         "the panel clock is not representable: divider {divider} is outside \
-         the PIO's 1..=65535 range (system clock {} Hz, panel clock {} Hz)",
-        system_clock.to_Hz(),
-        config.panel_clock.to_Hz()
+         the PIO's 1..=65535 range (system clock {system_clock_hz} Hz, panel clock {} Hz)",
+        config.panel_clock_hz
     );
     let divider = divider as u16;
-    let achieved =
-        Rate::<u32, 1, 1>::from_raw(achieved_clock(system_clock.to_Hz(), divider as u32));
+    let panel_clock_hz = achieved_clock(system_clock_hz, divider as u32);
 
     let (mut pio, sm0, _, _, _) = pio.split(resets);
 
@@ -462,7 +449,7 @@ pub fn bring_up<P: Hub75Pins>(
     #[cfg(feature = "invert-clock")]
     pins.invert_clock();
 
-    let stream = P::stream();
+    let stream = stream_for::<P::Word>();
     let program = pio
         .install(stream.program())
         .expect("the stream program fits the instruction memory");
@@ -491,7 +478,7 @@ pub fn bring_up<P: Hub75Pins>(
     BringUp {
         pins,
         divider,
-        panel_clock: achieved,
+        panel_clock_hz,
         fifo: tx.fifo_address() as u32,
         dreq: tx.dreq_value(),
     }
@@ -628,7 +615,7 @@ where
         control: CCH,
         resets: &mut pac::RESETS,
         pins: P,
-        system_clock: Rate<u32, 1, 1>,
+        system_clock_hz: u32,
         config: Hub75Config,
         fb: &'static mut FB,
         descriptors: &'static mut Hub75Descriptors<FB, N>,
@@ -638,7 +625,7 @@ where
         CCH: ChannelSetup,
     {
         let irq_line = Self::reserve(config)?;
-        let bringup = bring_up(pio, resets, pins, system_clock, config);
+        let bringup = bring_up(pio, resets, pins, system_clock_hz, config);
         Self::start_from(channel, control, bringup, config, irq_line, fb, descriptors)
     }
 }
@@ -653,9 +640,9 @@ pub(crate) fn arm(flag: u32, line: u8) {
     let register = match line {
         0 => dma.inte0().as_ptr(),
         1 => dma.inte1().as_ptr(),
-        #[cfg(feature = "rp2350")]
+        #[cfg(feature = "rphal-rp2350")]
         2 => dma.inte2().as_ptr(),
-        #[cfg(feature = "rp2350")]
+        #[cfg(feature = "rphal-rp2350")]
         3 => dma.inte3().as_ptr(),
         _ => unreachable!("a DMA interrupt line is 0 to 3"),
     };

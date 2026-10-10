@@ -18,12 +18,12 @@
 //!
 //! * A ghost **one column to the side** of a lit pixel is horizontal bleed: the
 //!   data moved while the panel was sampling it. That is a timing question — try a
-//!   lower panel clock ([`Hub75Config::with_panel_clock`]) and see if it goes.
+//!   lower panel clock ([`Hub75Config::with_panel_clock_hz`]) and see if it goes.
 //! * A ghost **on the row above or below** a lit pixel is row bleed: the panel's
 //!   shift register was still holding the previous row's data when the new row was
 //!   latched. It is the thing `hub75-framebuffer`'s `inter-row-blank`,
 //!   `lead-blank` and `trail-blank` features exist for; that is why this example
-//!   exists, so the leak is measured before a feature is added.
+//!   exists, so the leak is seen before a feature is added.
 //! * A ghost **on the first row while the last row is lit** (or the other way
 //!   round) is the frame boundary, which the diagonal and bar phases dwell on.
 //! * A ghost on the **other half** of the panel — row `r + 32` while row `r` is
@@ -47,7 +47,6 @@ use rp_hub75::hal;
 use hal::Sio;
 use hal::clocks::Clock;
 use hal::dma::DMAExt;
-use hal::fugit::Rate;
 use hal::gpio::Pins;
 use rp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer;
 use rp_hub75::framebuffer::compute_rows;
@@ -151,8 +150,11 @@ const XTAL_FREQ_HZ: u32 = 12_000_000;
 /// The driver rounds the divider up, so what the panel runs at is this or the next
 /// slower divider's clock — `Refresh:` on the display is the truth, not this
 /// number.
-const PANEL_CLOCK: Rate<u32, 1, 1> =
-    Rate::<u32, 1, 1>::MHz(if cfg!(feature = "20mhz") { 20 } else { 10 });
+const PANEL_CLOCK_HZ: u32 = if cfg!(feature = "20mhz") {
+    20_000_000
+} else {
+    10_000_000
+};
 
 #[hal::entry]
 fn main() -> ! {
@@ -211,10 +213,10 @@ fn main() -> ! {
             pins.gpio13,
             pins.gpio11,
         ),
-        clocks.system_clock.freq(),
+        clocks.system_clock.freq().to_Hz(),
         // The panel clock is the one knob that trades timing margin for refresh
         // rate: if a phase shows horizontal bleed, halve this and look again.
-        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock(PANEL_CLOCK),
+        Hub75Config::new(hal::pac::Interrupt::DMA_IRQ_1).with_panel_clock_hz(PANEL_CLOCK_HZ),
         fb0,
         hub75_descriptors!(Fb),
     )

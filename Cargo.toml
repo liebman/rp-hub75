@@ -13,42 +13,14 @@ version = "0.1.0"
 name = "rp_hub75"
 
 [features]
-# The backend family. Exactly one: `rphal` is `rp2040-hal`/`rp235x-hal`, `embassy`
-# is `embassy-rp`. Both select the HAL the driver is written against and the `hal`
-# path the examples import.
-#
-# Cargo features are additive, so `rphal` names *both* chips' crates; the axes are
-# kept apart by the *target* instead — each chip's rp-hal crate is declared under
-# that chip's target table below, so the wrong chip's crate is never built.
-#
-# These features enable only what the *library* names. The RT vector table and
-# entry point, the picotool header, the embassy-time driver, the RP2040's
-# second-stage bootloader, and the critical-section implementation are the
-# *binary's* business: each `examples/<name>` is its own package and names them in
-# its own manifest, so the library forces none of it on a consumer — as
-# `critical-section`'s README requires of a library.
-rphal = ["dep:rp235x-hal", "dep:rp2040-hal"]
-embassy = ["dep:embassy-rp", "embassy-rp/unstable-pac"]
+rphal-rp2040 = ["dep:rp2040-hal"]
+rphal-rp2350 = ["dep:rp235x-hal"]
+embassy-rp2040 = ["dep:embassy-rp", "embassy-rp/rp2040"]
+embassy-rp2350 = ["dep:embassy-rp", "embassy-rp/rp235xa"]
 
-# The chip. Exactly one. For rp-hal the crate follows from the chip's target table,
-# so the feature is a marker; for embassy-rp it sets the crate's chip with the weak
-# `?`, a no-op in an rp-hal build, where embassy-rp is not enabled.
-rp2350 = ["embassy-rp?/rp235xa"]
-rp2040 = ["embassy-rp?/rp2040"]
-
-# --- Library features --------------------------------------------------------
-#
-# These change how the driver drives the panel. The ones that forward to
-# `hub75-framebuffer` change the words it streams.
-#
-# Invert the clock pin's output in the GPIO block, for a panel that takes a column
-# on the clock's falling edge.
 invert-clock = []
 
-# Forward the output-enable polarity to `hub75-framebuffer`: the OE pin is driven
-# out of the framebuffer's words, so that crate is the only place the level lives.
 invert-oe = ["hub75-framebuffer/invert-oe"]
-
 skip-black-pixels = ["hub75-framebuffer/skip-black-pixels"]
 tail-closes-latch = ["hub75-framebuffer/tail-closes-latch"]
 lead-blank-1 = ["hub75-framebuffer/lead-blank-1"]
@@ -72,27 +44,13 @@ inter-row-blank-32 = ["hub75-framebuffer/inter-row-blank-32"]
 reverse-row-order = ["hub75-framebuffer/reverse-row-order"]
 
 [dependencies]
-# Shared with the DMA interrupt, so in a `critical_section::Mutex` (and an
-# `AtomicBool` for the swap flag). A library does not supply the implementation —
-# see the note in `critical-section`'s README: the end binary does. Each example
-# package enables it; a downstream consumer supplies its own.
 critical-section = "1.2"
-# For `cortex_m::peripheral::NVIC::unmask`, the driver's DMA-line unmask.
 cortex-m = "0.7"
 embedded-graphics = "0.8.2"
-# Native atomics on the RP2350; the RP2040's target table adds `critical-section`.
 portable-atomic = { version = "1", default-features = false }
-# `interstate75` puts word bit n on pin n, so one `out pins, 14` writes the bus.
 hub75-framebuffer = { version = "0.13.0", features = ["interstate75"] }
 pio = "0.3"
-# The second backend: the same PIO and DMA through embassy-rp, its chip set by
-# `rp2040`/`rp2350`. `unstable-pac` is a library feature (`embassy_rp::pac` is
-# `pub(crate)` without it); the RT, the time driver and the critical-section impl
-# are the embassy example's.
-embassy-rp = { version = "0.10", optional = true, default-features = false }
-# The `Rate` type the API uses; `rp-hal` re-exports it, `embassy-rp` does not.
-fugit = "0.3"
-# The `StaticCell` `hub75_descriptors!` allocates, so a real dependency.
+embassy-rp = { version = "0.10", optional = true, default-features = false, features = ["unstable-pac"] }
 static_cell = "2.1"
 
 [profile.dev]
@@ -105,15 +63,9 @@ opt-level = "s"
 
 # --- Target-specific dependencies --------------------------------------------
 #
-# Each chip's rp-hal crate is declared only in its own chip's target table, so the
-# wrong chip's crate is never resolved even though `rphal` enables both `dep:` names.
-# The `thumbv8m.main` triple contains a dot, which TOML would read as nested keys, so
-# the table key is quoted.
-#
-# The host entry keeps the library buildable for the host tests and `cargo doc`: it is
-# the RP2350 HAL, and `not(target_os = "none")` is true only off bare metal, so it does
-# not match a chip build. The host tests link, so this entry keeps the HAL's
-# critical-section impl; no chip build takes it from the library.
+# The host entry keeps the library buildable for the host tests and `cargo doc`;
+# `not(target_os = "none")` is true only off bare metal, so a chip build does not
+# match it. The quoted key: `thumbv8m.main` contains a dot TOML would nest.
 [target.'cfg(not(target_os = "none"))'.dependencies]
 rp235x-hal = { version = "0.4.0", optional = true, features = [
     "binary-info",
@@ -121,23 +73,18 @@ rp235x-hal = { version = "0.4.0", optional = true, features = [
     "rt",
 ] }
 
-# A chip build names the HAL's PIO, DMA, GPIO and PAC types only, and none of those
-# needs a feature. What a *binary* needs — the RT vector table, the picotool header,
-# the second-stage bootloader, the critical-section impl — is named by each example
-# package rather than here.
+# A chip build names the HAL's types only; the features a *binary* needs are in
+# each example package.
 [target."thumbv8m.main-none-eabihf".dependencies]
 rp235x-hal = { version = "0.4.0", optional = true }
 
 [target.thumbv6m-none-eabi.dependencies]
 rp2040-hal = { version = "0.12.0", optional = true }
-# The RP2040 (Cortex-M0+) has no atomic compare-and-swap, so the driver and
-# `static_cell` get one through a critical section. The RP2350 (Cortex-M33) has real
-# atomics.
+# Cortex-M0+ has no compare-and-swap, so `portable-atomic` emulates one in a
+# critical section.
 portable-atomic = { version = "1", default-features = false, features = [
     "critical-section",
 ] }
 
-# Optional: develop against the sibling `hub75-framebuffer` checkout instead of
-# the published crate. Uncomment both lines to override.
 # [patch.crates-io]
 # hub75-framebuffer = { path = "../hub75-framebuffer" }
