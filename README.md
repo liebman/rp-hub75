@@ -66,7 +66,7 @@ a build missing an axis stops instead of picking a board. `rphal` builds against
 use the same `pio` crate, so the engine and the stream programs are shared and
 only the port differs. `.cargo/config-rp2040.toml` and
 `.cargo/config-rp2350.toml` carry the per-chip target and runner settings, shared
-by both backends (see the build table in [`AGENTS.md`](AGENTS.md)).
+by both backends.
 
 Each chip's `rp-hal` crate is declared under that chip's target triple, so
 `rphal` can name both without building the wrong one — a build is

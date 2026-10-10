@@ -7,18 +7,13 @@ publish = false
 license = "MIT OR Apache-2.0"
 
 [features]
-# The chip, forwarded to the library. Exactly one, named by an alias in
-# `.cargo/config.toml`.
+# The chip, forwarded to the library; named by an alias in `.cargo/config.toml`.
 rp2350 = ["rp-hub75/rp2350"]
 rp2040 = ["rp-hub75/rp2040"]
-# The panel clock: 10 MHz without it, 20 MHz with it (the divider rounds up, so
-# 20 MHz lands on 18.75 MHz).
+# The panel clock: 10 MHz without it, 20 MHz with it (rounded up by the divider).
 20mhz = []
 
-# ---- rp-hub75 feature pass-through ----
-#
-# The panel tunings, each forwarded to the library, so an example build selects a
-# panel's tuning: `cargo run-rp2350 --features invert-oe`, or several at once.
+# Panel tunings, each forwarded to the library.
 invert-clock = ["rp-hub75/invert-clock"]
 invert-oe = ["rp-hub75/invert-oe"]
 skip-black-pixels = ["rp-hub75/skip-black-pixels"]
@@ -44,22 +39,18 @@ reverse-row-order = ["rp-hub75/reverse-row-order"]
 [dependencies]
 rp-hub75 = { path = "../..", features = ["rphal"] }
 embedded-graphics = "0.8.2"
-# The framebuffers' `'static` storage. The framebuffer crate itself is not named:
-# its layout and types arrive through `rp_hub75::framebuffer`.
+# The framebuffers' `'static` storage; the crate arrives through the library.
 static_cell = "2.1"
-# The log. `disable-blocking-mode` is required: a blocking RTT write would stall
-# the display loop.
+# `disable-blocking-mode` keeps a stalled RTT reader from freezing the loop.
 defmt = "1"
 defmt-rtt = { version = "1.3", features = ["disable-blocking-mode"] }
 panic-probe = { version = "1", features = ["print-defmt"] }
 # The `rp2040-hal` `entry` macro names `cortex_m_rt` in the crate root.
 cortex-m-rt = "0.7"
-# The telemetry example's atomics: native on the RP2350, a critical section on
-# the RP2040 (whose target table below adds the `critical-section` feature).
+# The example's atomics: native on the RP2350, a critical section on the RP2040.
 portable-atomic = { version = "1", default-features = false }
 
-# The HAL features an end binary needs — the RT vector table, the picotool header
-# and the critical-section impl — live here, not in the library.
+# A binary's needs — RT vector table, picotool header, critical-section impl.
 [target."thumbv8m.main-none-eabihf".dependencies]
 rp235x-hal = { version = "0.4.0", features = [
     "binary-info",
@@ -76,8 +67,7 @@ rp2040-hal = { version = "0.12.0", features = [
 portable-atomic = { version = "1", default-features = false, features = [
     "critical-section",
 ] }
-# The RP2040 ROM runs a 256-byte second-stage bootloader from flash before the
-# application; the example places this crate's code in `.boot2`.
+# The RP2040's 256-byte second-stage bootloader, placed in `.boot2`.
 rp2040-boot2 = "0.3.0"
 
 [profile.dev]
@@ -88,8 +78,5 @@ opt-level = "s"
 debug = true
 opt-level = "s"
 
-# Optional: develop against the sibling `hub75-framebuffer` checkout instead of
-# the published crate. This package is its own workspace, so the patch is per
-# example; uncomment both lines to override.
 # [patch.crates-io]
 # hub75-framebuffer = { path = "../../../hub75-framebuffer" }
